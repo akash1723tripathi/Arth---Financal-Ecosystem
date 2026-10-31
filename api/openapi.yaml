@@ -92,7 +92,7 @@ paths:
         Creates the user, the default "Cash" account and a session in one DB transaction and returns a token pair.
         The user starts with `needs_onboarding: true`. The password policy (8–128 characters, not a common
         password) is enforced by the server and reported as `422 weak_password`. An existing email
-        (case-insensitive) → `409 email_taken`. Rate-limited per IP and per email.
+        (case-insensitive) → `409 email_taken`. Rate-limited per IP (5/hour).
       security: []
       requestBody:
         required: true
@@ -192,8 +192,9 @@ paths:
       tags: [auth]
       summary: Sign out this session
       description: |
-        Revokes the session that owns `refresh_token` (it must belong to the authenticated user). The access
-        token stays valid until it expires (≤ 15 min); the client deletes its stored tokens.
+        Revokes the session that owns `refresh_token` (it must belong to the authenticated user). Its access
+        tokens stop working immediately (every request checks the session). An unknown or foreign token → `204`
+        and nothing happens. The client deletes its stored tokens.
       requestBody:
         required: true
         content:
@@ -277,7 +278,8 @@ paths:
       description: |
         Partial update: omitted fields are unchanged; `null` is not accepted. `currency` must be a supported
         ISO 4217 code and `timezone` a valid IANA zone (`422 validation_failed` otherwise). Changing the
-        default currency does not change existing accounts.
+        default currency does not change existing accounts. Changing it after the user has any transaction →
+        `409 currency_locked`.
       requestBody:
         required: true
         content:
@@ -295,6 +297,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/Validation'
         '500':
@@ -967,7 +971,7 @@ paths:
       description: |
         Upload one image as the `file` part (JPEG, PNG, WebP or HEIC, at most 5 MB). Returns a draft the client
         shows for review; nothing is stored. Any field the provider could not read is `null`. Wrong type →
-        `415`, too big → `413`, provider failure → `502 ai_unavailable`. Rate-limited per user.
+        `415`, too big → `413`, provider failure → `502 ai_unavailable`. A per-user rate limit is planned (not implemented yet).
       requestBody:
         required: true
         content:
