@@ -1,83 +1,95 @@
 # Progress
 
-Last updated: **2026-10-31**, branch `feat/mobile-restructure` (Phase 1 complete). Start every session by reading this file (`/status`).
+Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). Start every session by reading this file (`/status`).
 
 ## Phase / status
 
-**Phase 1 (mobile restructure) is done.** The mobile app lives in `apps/mobile`, is renamed to Arth, and compiles, but it **still uses Clerk,
-Supabase and client-side Gemini**. **Next: Phase 2, the Go backend incl. auth.**
+- **Phase 1 (mobile restructure): done** (previous session, merged into `main` as a fast-forward).
+- **Phase 2 (Go API incl. own auth): done for MVP scope.** All 33 operations in `api/openapi.yaml` are implemented in `apps/api` and
+  tested against real Postgres. Not built: transfers, password reset / email verification, worker jobs, per-user AI rate limit,
+  idempotency keys, real providers (all blocked on OPEN items or post-MVP, see below).
+- **Mobile still uses Clerk + Supabase + client-side Gemini.** Untouched this session; Phase 4 repoints it.
+- **Next: Phase 3, the Next.js web app** (see "Next session" below).
 
-## Done (this session)
+## Done (this session, branch `feat/go-api`)
 
 | Commit | What |
 | --- | --- |
-| `b0eda02` (main) | `chore: import Welth baseline`: the untouched ZIP copy (`supabase/.temp` CLI cache excluded) |
-| `5c317d0` | Planning docs from the first exploration session |
-| `621e15a` | Restored `app/_layout.tsx`, `app/index.tsx`, `app/(root)/_layout.tsx`, `tsconfig.json` from upstream `9e52cfb` (everything else was identical) |
-| `746e821` | Monorepo: `git mv` into `apps/mobile` and `legacy/`, pnpm workspace (hoisted), placeholders, docker-compose Postgres 16, `.gitignore`/`.gitattributes`/`.env.example` |
-| `70d9322` | Renamed to Arth: `fyi.akashbuilds.arth`, scheme `arth`, permission strings |
-| `b8c19eb` | Project memory: root + nested CLAUDE.md, AGENTS.md pointer, `.claude/` settings, commands, rules |
-| `936dd49` | Docs for own auth + provider interfaces: ARCHITECTURE, MIGRATION, SCHEMA, API, AUTH (new), DECISIONS (new), ROADMAP, DEPLOYMENT, WEB_APP |
-| `510bd2c` | MOBILE_SCREENS.md |
-| *(this commit)* | PROGRESS.md, RUN_LOCALLY.md |
+| `8707c60` | Scaffold: `cmd/api` (serve, migrate), `cmd/worker` stub, config + `.env` loader, slog, middleware, `/healthz`, `/readyz`, graceful shutdown, Dockerfile, Makefile, `scripts/dev.ps1`. Auth decisions recorded in DECISIONS.md |
+| `c5c61a8` | Core libs: `money`, `auth` primitives (Argon2id + NFC, policy, HS256 JWT, refresh tokens, rate limiters), `provider/{ai,email,storage,push}` interfaces + fake drivers |
+| `5e88e23` | DB: goose migrations (MVP schema + 21 categories), sqlc config + queries, `InTx`, schema tests |
+| `575f876` | Contract: full OpenAPI 3.1 spec, oapi-codegen strict server, kin-openapi validation, auth middleware with per-request session check, testutil |
+| `f48dca3` | Auth endpoints (register, login, refresh rotation + reuse detection, logout, logout-all, password, DELETE /v1/me) + AUTH.md §9 tests |
+| `24dd7b5` | Me + onboarding |
+| `396b473` | Accounts + categories |
+| `3aedb3b` | Transactions (balance deltas in one DB transaction, keyset pagination) |
+| `368abaf` | Budgets, dashboard, daily report |
+| `5d3c035` | CSV export |
+| `ad04a18` | Receipt extraction behind the AI provider interface (fake driver) |
+| *(next commit)* | Spec fixes (PATCH /v1/me 409, logout / rate-limit texts) + docs: API, SCHEMA, MIGRATION, AUTH, DECISIONS, ROADMAP, PROGRESS, RUN_API_LOCALLY, api CLAUDE.md/README |
+
+Note: the first three commits do not build on their own (the router and migration runner reference packages from later commits).
+Every commit from `575f876` on was checked out in a temporary worktree and passes `go build ./...` + `go vet ./...`.
 
 ### Verification evidence (commands actually run)
 
 | Check | Result |
 | --- | --- |
-| `npx tsc --noEmit` (baseline, npm install) | exit 0 |
-| `eslint .` (baseline) | `✖ 2 problems (0 errors, 2 warnings)` (upstream `exhaustive-deps` warnings) |
-| `expo export --platform android` (baseline) | built `entry-….hbc (9.25 MB)` |
-| `pnpm install` with isolated linker | installed, but the **bundle failed**: `Unable to resolve module react-native-css-interop/jsx-runtime` (after ~35 min) |
-| `pnpm install` with `nodeLinker: hoisted` | `Packages: +1082`, done in 14 s |
-| `pnpm mobile:typecheck` / `mobile:lint` (workspace) | exit 0 / 0 errors, 2 warnings |
-| `pnpm mobile:bundle:android` (workspace) | exit 0 in 36 s, `entry-….hbc (9.25 MB)` |
-| `pnpm verify:mobile` after the rename | exit 0 |
-| `npx expo install --check` | "Dependencies are up to date" |
-| Single copies | react 19.1.0, react-native 0.81.5, expo 54.0.38 at the root `node_modules` |
+| Tools | go1.26.5 windows/amd64, Docker 29.5.3, Postgres 16.14 (container `arth-postgres`), sqlc 1.30.0 (Docker), oapi-codegen v2.8.1 (`go tool`) |
+| `go build ./...` / `go vet ./...` (apps/api) | exit 0 / exit 0 |
+| `gofmt -l .` | no files |
+| `go test -count=1 ./...` | **15 packages ok, 442 tests + subtests passed, 0 failed, 0 skipped** (149 top-level tests). Per package: apitest/auth 53, transactions 55, accounts 39, me 37, ai 29, budgets 28, dashboard 21, export 7; auth 66, httpapi 44, config 24, db 13, money 6, providers 20 |
+| `go test -race` | auth slice + core libs pass with `CGO_ENABLED=1` (gcc from MSYS2) |
+| Docker image | `docker build` ok, 29.4 MB distroless; container ran `migrate status`, `/readyz` ready, clean SIGTERM shutdown |
+| `go run ./cmd/api migrate up` on the dev DB | `OK up 00001_init.sql`, `OK up 00002_seed_categories.sql` |
+| Live smoke test (curl, git-bash) | register 201 → login 200 → wrong password 401 → onboarding 200 → create account 201 → create transaction 201 (balance 10000000 → 9954950) → dashboard 200 (`total_balance_minor` 10454950 = 500000 + 9954950). Every other endpoint returned its expected status (list in the session's final report) |
+| Live auth checks | refresh 200; re-using the old refresh token 401 `refresh_invalid` and its successor also 401 (session revoked); password change 204; logout 204 then 401; logout-all 204 then 401; DELETE /v1/me wrong password 401, right 204, then 401 |
+| Server log (61 lines) | 0 passwords, 0 Argon2 hashes, 0 emails, 0 JWTs; reuse security event present |
+| `docs/RUN_API_LOCALLY.md` §5 | run as written in Windows PowerShell 5.1.26100 (Invoke-RestMethod). Piping JSON into `curl.exe` failed with 400 (BOM) and was replaced |
 
 ### I must test manually (not run in this session)
 
-- [ ] The app actually starting on an Android emulator (needs Clerk/Supabase/Gemini legacy credentials; `docs/RUN_LOCALLY.md`)
-- [ ] A native Android build (`npx expo run:android` or EAS dev client) from the monorepo
-- [ ] `docker compose up -d db` (compose file written, not started)
-- [ ] The `.claude/` permission rules and slash commands behave as intended in a fresh Claude Code session
+- [ ] Ctrl+C graceful shutdown of `go run ./cmd/api` in a native Windows console (tested only via Docker SIGTERM)
+- [ ] `docs/RUN_API_LOCALLY.md` §2–§4 from a fresh clone (the `.env` generator ran in a scratch folder; the real `.env` files were created differently)
+- [ ] The Docker run command in RUN_API_LOCALLY §7 with your own env file
+- [ ] Any real AI/email/storage provider (none chosen)
+- [ ] Mobile app against the new API (Phase 4)
 
-## Next: Phase 2, Go backend (the next session starts here)
+## Next session: Phase 3, Next.js web (`apps/web`)
 
-1. **Ask the owner first**:
-   - approve the Go dependencies: `golang.org/x/crypto` (argon2id), a JWT library or stdlib-only, `google/uuid`, `golang.org/x/time/rate`, River or an alternative;
-   - answer AUTH.md Q-1…Q-5, Q-8, Q-10, Q-12 (defaults are proposed there);
-   - pick the TS client generator.
-2. `pnpm db:up`, `go mod init` in `apps/api`, `cmd/api` with `/healthz` + `/readyz`, config + slog.
-3. goose baseline migration from `docs/SCHEMA.md` §3.1 (users, sessions, refresh_tokens, categories, accounts, transactions, budgets, notifications) plus the category seed.
-4. `api/openapi.yaml`: auth + me endpoints. Wire oapi-codegen and sqlc.
-5. `internal/auth` + `/v1/auth/*` with the AUTH.md §9 tests against real Postgres. Then `/v1/me*`, accounts, transactions, budgets, dashboard, export.
-6. Provider interfaces with fake drivers (AI, email, storage). Worker jobs with the log email driver.
+1. **Ask the owner first:** D-OPEN-6 (web token transport: (a) httpOnly cookies from the API, (b) in-memory access + httpOnly refresh cookie,
+   (c) Next.js BFF). (a)/(b) need API changes (cookie variants of register/login/refresh, CSRF, CORS with credentials) **before** the web build.
+   Also the UI kit + charts library (D-OPEN-10) and D-OPEN-5 (hosting) if deployment matters yet.
+2. `packages/api-client`: generate types with **openapi-typescript** + client with **openapi-fetch** (decided) from `api/openapi.yaml`;
+   add `formatMinor` / `parseMoneyInput` money helpers. Ask before adding the two packages to package.json (decided, but list the versions).
+3. Scaffold `apps/web` (Next.js App Router) per `docs/WEB_APP.md`, screens from `docs/MOBILE_SCREENS.md`, against the local API (`docs/RUN_API_LOCALLY.md`).
+4. Review the "decided by default" items below.
 
 ## What later sessions must pick up
 
-- **Phase 3 (web):** build from `docs/MOBILE_SCREENS.md` + `docs/WEB_APP.md`. Needs D-OPEN-5 (hosting) and D-OPEN-6 (auth transport).
-- **Phase 4 (repoint mobile):** follow `docs/MIGRATION.md` §5. Delete Clerk/Supabase/Gemini code + deps + env vars. Revoke the old Gemini key. Delete `legacy/`.
-- **Phase 5 (emulator testing):** `docs/RUN_LOCALLY.md` + every state in MOBILE_SCREENS.md.
-- **Before launch:** OPEN decisions D-OPEN-1…11 (`docs/DECISIONS.md`), the licence (D-OPEN-11), artwork, package id confirmation.
+- **Transfers** (`/v1/transfers`, MVP-stretch): schema + `DeleteTransferPeer` exist; account delete must then reverse transfer peers.
+- **Worker** (D-OPEN-9 job library): budget alerts, weekly tips, balance reconcile; the budget-check enqueue TODO is in `server_transactions.go`.
+- **Email** (D-OPEN-2, launch blocker): password reset, email verification, `auth_tokens` migration, unsubscribe endpoint.
+- **Hardening:** per-user AI rate limit, `Idempotency-Key`, rate-limit storage for >1 instance (Q-10), DB roles `arth_migrator`/`arth_app`, X-Forwarded-For once a proxy exists.
+- **Phase 4 (repoint mobile):** `docs/MIGRATION.md` (every legacy call now maps to an implemented endpoint or a "not built" reason).
+
+## Decisions to review (decided by default this session)
+
+See `docs/DECISIONS.md`: AUTH Q-1 (Argon2id params), Q-2, Q-4, Q-6, Q-7, Q-8, Q-10, and implementation choices D-19 … D-30
+(INR placeholder for the default account, logout semantics, shared login buckets for wrong passwords, budget currency fixed at PUT time, etc.).
 
 ## Known problems
 
-1. The app runs only against the legacy services (Clerk, Supabase with `legacy/scripts/schema.sql`, Gemini). Not run at runtime this session.
-2. **pnpm must use `nodeLinker: hoisted`.** Isolated installs break Metro (NativeWind's `react-native-css-interop/jsx-runtime`).
-3. The lockfile was regenerated by pnpm (the upstream `package-lock.json` was out of sync and `npm ci` refused), so transitive versions are
-   fresh within the declared ranges (e.g. `@clerk/react` 6.18.4 vs 6.12.0 in the old lock). Compile-verified only.
-4. pnpm 10 skipped the build scripts of `browser-tabs-lock`, `core-js`, `unrs-resolver`. Lint and bundle work without them. Revisit with `pnpm approve-builds` if something misbehaves.
-5. Pre-existing peer warning: `@clerk/expo` wants react `~19.1.4`, the app has `19.1.0`. Goes away when Clerk is removed.
-6. Native builds from the monorepo are untested. If autolinking fails, try `expo.experiments.autolinkingModuleResolution: true` (SDK 54 option; ask first).
-7. Logo/icon artwork still shows Welth (`apps/mobile/assets/images/welth*.png`, icons). Replace before launch.
-8. Transaction rows always format in INR (`components/TransactionRow.tsx:72`).
-9. Sign-in `needs_second_factor` sends a phone code with no input screen (`app/(auth)/sign-in.tsx:57-58`).
-10. The Biometric lock switch does nothing. Home has no error states.
-11. Two lint warnings (`hooks/useSupabase.ts:10`, `hooks/useUserSync.ts:74`), both in files that Phase 4 deletes.
-12. `legacy/supabase/functions/weekly-tips/index.ts:4` imports `../../../constants/categories.ts`, which no longer resolves after the move (reference code, not built).
-13. `expo lint` printed nothing in this non-interactive shell, so the `lint` script now runs `eslint .` directly (same config).
-14. Git recorded the root `package.json` and `README.md` as modify + add (new files took their paths), not as renames; history for those two starts at `746e821`.
-15. pnpm is not on PATH on this machine. This session used a temporary corepack shim. See RUN_LOCALLY §1.
-16. Welth has no licence (D-OPEN-11). Placeholder package id `fyi.akashbuilds.arth` is to be confirmed before any Play upload.
+1. Commits `8707c60`, `c5c61a8`, `5e88e23` don't build individually (see above).
+2. The per-request session check uses the DB clock (`now()`) while refresh expiry uses the app clock. Fine in production; tests that move the
+   fake clock backwards get 401.
+3. An impossible date in a query param (`2026-02-30`) returns 400 from the generated binder instead of 422; a non-multipart body on the receipt
+   endpoint returns 400 instead of 415. Both documented in API.md.
+4. No per-user AI rate limit yet; the fake AI driver ignores the image.
+5. Rate limits are in memory (single instance only, Q-10). Five wrong current passwords on change-password also throttle login for that email (D-24).
+6. `readyz` 503s are logged at ERROR on every failed probe (noisy if a load balancer polls a cold DB).
+7. 405 responses carry no `Allow` header (chi limitation with a custom handler).
+8. Category names, emoji and colours in `00002_seed_categories.sql` are copied from Welth (MIGRATION.md §7, licence D-OPEN-11).
+9. A GitHub remote `origin` now exists although DECISIONS D-13 says git is local only; nothing was pushed. Update D-13 when you decide.
+10. Earlier mobile problems still apply (`nodeLinker: hoisted`, Welth artwork, INR-only TransactionRow, sign-in second-factor dead end, …);
+    see the previous version of this file in git (`git show 9b265e5:docs/PROGRESS.md`).

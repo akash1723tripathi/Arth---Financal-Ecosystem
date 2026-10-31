@@ -53,9 +53,17 @@ asked for that; the owner should review these.
 | D-17 | The contract stays OpenAPI **3.1** (oapi-codegen v2.8.1 and kin-openapi v0.142 were tested with 3.1 type arrays). Request validation = kin-openapi `openapi3filter` middleware against the embedded spec | No extra dependency; unknown fields rejected by `additionalProperties: false` |
 | D-18 | sqlc runs from the `sqlc/sqlc:1.30.0` Docker image (no local install); goose runs as a library inside `api migrate` | No system software to install on Windows |
 | D-19 | Register creates the default "Cash" account with currency **INR** as a placeholder. Onboarding sets the user's currency and re-sets the default account's currency and opening balance (refused with `409 currency_locked` if that account already has transactions) | `accounts.currency` is NOT NULL but the user picks a currency only at onboarding. **Review needed** |
-| D-20 | PATCH bodies are non-nullable: omitted = unchanged, `""` clears `description` | Avoids an extra nullable-type dependency in generated code |
+| D-20 | PATCH bodies are non-nullable: omitted = unchanged, `""` clears a transaction's `description` / `voice_transcript` only (not `name`, see D-30) | Avoids an extra nullable-type dependency in generated code |
 | D-21 | Not built this session (kept out of the spec): transfers, password reset, email verification, unsubscribe, sessions list, voice, assistant, avatar, `/v1/me/export` | Blocked on OPEN items or post-MVP |
 | D-22 | Background jobs: `cmd/worker` is a stub; no job library until D-OPEN-9 | Owner instruction |
+| D-23 | Logout revokes the session owning the presented refresh token **only if it is the caller's**; an unknown, malformed, already-revoked or foreign token is a silent `204` | Logout is not an oracle for other people's tokens; the body names the session to end |
+| D-24 | Wrong passwords on `POST /v1/auth/password` and `DELETE /v1/me` count against the login buckets (per email + per IP). Side effect: a stolen access token can throttle login for that email (bucket refills fully within 15 min) | A stolen access token cannot be used to brute-force the password |
+| D-25 | Refresh checks session revocation / absolute expiry / token expiry **before** reuse: an expired (or revoked) used token gives `401 refresh_invalid` without revoking anything | Reuse detection is only meaningful for a token that could still work |
+| D-26 | A budget stores the user's currency at `PUT` time. A budget set before onboarding stays INR until it is PUT again | Simple; budgets are re-set rarely. **Review**: re-PUT or migrate on onboarding? |
+| D-27 | Budget `DELETE` is idempotent: `204` even when none was set | Clients need no existence check |
+| D-28 | Onboarding is refused (`409 currency_locked`) only when it would **change** the default account's currency while it has transactions; the same currency with transactions is allowed | Nothing is lost when the currency stays |
+| D-29 | The per-request session check compares `expires_at` with DB `now()`; refresh expiry uses the app clock (`Deps.Now`) | Session check is one SQL query; refresh logic is clock-injectable for tests. Fine on one host, watch for clock skew |
+| D-30 | `PATCH /v1/me` cannot clear `name` (`minLength: 1`, whitespace-only → `422`) | Follows D-20 (no nulls); an empty display name has no use |
 
 ## OPEN
 
@@ -132,8 +140,10 @@ Postgres-backed library. Trade-offs: a dependency vs code to maintain. River nee
 
 ### D-OPEN-10 · Smaller tooling choices (ask before adding)
 
-- Go: `golang.org/x/crypto` (argon2id), a JWT library vs stdlib, `google/uuid`, `golang.org/x/time/rate`, golangci-lint.
-- TS client generator for `packages/api-client`: openapi-typescript + openapi-fetch, orval, or hey-api.
+- ~~Go: `golang.org/x/crypto` (argon2id), a JWT library vs stdlib, `google/uuid`, `golang.org/x/time/rate`.~~ **Decided** (owner, 2026-11-01;
+  see D-16): `golang.org/x/crypto`, `github.com/golang-jwt/jwt/v5`, `google/uuid`, `golang.org/x/time/rate` (+ `golang.org/x/text`). golangci-lint is still open.
+- ~~TS client generator for `packages/api-client`: openapi-typescript + openapi-fetch, orval, or hey-api.~~ **Decided** (owner, 2026-11-01):
+  **openapi-typescript + openapi-fetch**, set up in the web session.
 - Error tracking: Sentry (SaaS), self-hosted GlitchTip, or logs only.
 - Web UI kit and charts library.
 

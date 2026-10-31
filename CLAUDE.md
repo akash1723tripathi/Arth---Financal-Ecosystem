@@ -8,15 +8,16 @@ Solo developer, 6-month MVP. The project started from the third-party Welth boil
 ## Status
 
 - **Done:** mobile app restructured into the monorepo and renamed to Arth (placeholder id `fyi.akashbuilds.arth`, scheme `arth`).
-  It compiles: tsc, eslint and the Android bundle pass.
+- **Done:** Go API in `apps/api` with own auth: all 33 operations in `api/openapi.yaml`, 442 tests against real Postgres, live smoke test
+  (branch `feat/go-api`). Not built: transfers, password reset/verification, worker jobs, real providers.
 - **Temporary:** the mobile app **still uses Clerk + Supabase + client-side Gemini**. These are marked "to be replaced" and must not be removed
-  until the Go API exists.
-- **Next session:** the Go backend in `apps/api`, auth included (`docs/AUTH.md`). Full detail: `docs/PROGRESS.md`.
+  until Phase 4 repoints mobile to the Go API.
+- **Next session:** the Next.js web app (`apps/web`); first decide D-OPEN-6 (web token transport). Full detail: `docs/PROGRESS.md`.
 
 ## Session order (decided)
 
 1. Mobile restructure ✅
-2. Go API incl. auth
+2. Go API incl. auth ✅
 3. Next.js web
 4. Repoint mobile to the Go API and drop Clerk/Supabase
 5. Android emulator testing
@@ -28,10 +29,10 @@ Solo developer, 6-month MVP. The project started from the third-party Welth boil
 
 ```text
 apps/mobile/          Expo SDK 54 app (Android first)          → apps/mobile/CLAUDE.md
-apps/api/             Go API + worker (placeholder)            → apps/api/CLAUDE.md
+apps/api/             Go API (done for MVP) + worker (stub)            → apps/api/CLAUDE.md
 apps/web/             Next.js web app (placeholder)            → apps/web/CLAUDE.md
 packages/api-client/  TS client generated from the contract (placeholder)
-api/openapi.yaml      HTTP contract: single source of truth (OpenAPI 3.1 skeleton)
+api/openapi.yaml      HTTP contract: single source of truth (OpenAPI 3.1, 33 operations)
 docker-compose.yml    local Postgres 16 (dev only)
 legacy/               Welth Supabase functions + SQL: reference only, deleted later
 docs/                 all design docs (index below)
@@ -65,7 +66,7 @@ pnpm workspace (`pnpm-workspace.yaml`, pnpm 10 via corepack, `nodeLinker: hoiste
 
 ## Git
 
-Local only. Branch per piece of work (current: `feat/mobile-restructure`). Conventional Commits, one commit per task. `main` holds the Welth baseline.
+Local only. Branch per piece of work (current: `feat/go-api`). Conventional Commits, one commit per task. `main` holds the Welth baseline.
 
 ## Commands (from the repo root)
 
@@ -75,7 +76,7 @@ Local only. Branch per piece of work (current: `feat/mobile-restructure`). Conve
 | Verify mobile (tsc + lint + Android bundle) | `pnpm verify:mobile` (or `/verify-mobile`) |
 | Run mobile | `pnpm mobile` (see `docs/RUN_LOCALLY.md`) |
 | Local Postgres | `pnpm db:up` / `pnpm db:down` (needs `.env` from `.env.example`) |
-| Go API (later) | see `apps/api/CLAUDE.md` |
+| Go API | `cd apps/api; go run ./cmd/api` (+ `migrate up`, `go test ./...`), see `docs/RUN_API_LOCALLY.md` |
 
 ## Docs index
 
@@ -93,3 +94,4 @@ Local only. Branch per piece of work (current: `feat/mobile-restructure`). Conve
 | `docs/WEB_APP.md` | Next.js structure |
 | `docs/DEPLOYMENT.md` | Environments, env var names, CI/CD (hosting OPEN) |
 | `docs/RUN_LOCALLY.md` | Windows steps to run the mobile app on an emulator |
+| `docs/RUN_API_LOCALLY.md` | Windows PowerShell steps to run the Go API, migrations, tests and example calls |

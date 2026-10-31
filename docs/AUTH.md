@@ -1,8 +1,11 @@
-# Authentication (proposed design, not implemented)
+# Authentication (design, implemented in the Go API session)
 
-Arth owns authentication. Clerk is replaced by the Go API, with credentials stored in Postgres. This document is a **proposal** for the
-Go-backend session to implement. Every unresolved point is marked **Q-n** and listed in §11. Tables: `docs/SCHEMA.md` (`users`,
-`sessions`, `refresh_tokens`, later `auth_tokens`). Endpoints: `docs/API.md` → Auth.
+Arth owns authentication. Clerk is replaced by the Go API, with credentials stored in Postgres. This design is **implemented** in
+`apps/api/internal/auth` (hashing, password policy, tokens, refresh rotation, rate limits) and `apps/api/internal/httpapi/server_auth.go`
+(the `/v1/auth/*` handlers and `DELETE /v1/me`) in the Go API session. The questions marked **Q-n** are listed in §11; their
+resolutions are in `docs/DECISIONS.md` ("Auth questions"). Where the text below still says "proposal" or offers options, DECISIONS.md
+records what was chosen. Tables: `docs/SCHEMA.md` (`users`, `sessions`, `refresh_tokens`, later `auth_tokens`). Endpoints:
+`docs/API.md` → Auth (contract: `api/openapi.yaml`).
 
 ## 1. Goals and non-goals
 
@@ -59,7 +62,7 @@ Go-backend session to implement. Every unresolved point is marked **Q-n** and li
 
 - `POST /v1/auth/logout {refresh_token}`: revoke that token's session (`LOGOUT`). The client deletes its stored tokens.
 - `POST /v1/auth/logout-all`: revoke all of the user's sessions (`LOGOUT_ALL`).
-- With Option A (Q-5), access tokens stay valid until `exp` (≤ 15 min). This is documented as accepted.
+- Q-5 is decided as a per-request session check (docs/DECISIONS.md), so a revoked session's access tokens stop working immediately (tested in `apps/api/internal/httpapi/wiring_test.go` and `apitest/auth/sessions_test.go`).
 
 ### Change password
 
@@ -93,13 +96,15 @@ Google Play also requires a web path to request deletion (web app, session 3).
 | Endpoint | Limit (starting point) | Key |
 | --- | --- | --- |
 | login | 5 failures / 15 min per (email), 20 / 15 min per IP; then `429` with `Retry-After` | email + IP |
-| register | 5 / hour per IP | IP |
-| refresh | 60 / hour per session | session |
-| password-reset request | 3 / hour per email, 10 / hour per IP | email + IP |
+| register | 5 / hour per IP (**per IP only**, no per-email limit). Checked after the email/password checks, so a `422` does not use a slot | IP |
+| refresh | 60 / hour per session (a refused refresh does not consume the token) | session |
+| change password, `DELETE /v1/me` | Share the **login** buckets: every attempt uses the per-IP login bucket, a wrong password also counts as a failed login for the account's email. `429` once either is exhausted | email + IP |
+| password-reset request (not built, D-OPEN-2) | 3 / hour per email, 10 / hour per IP | email + IP |
 
-- Storage: in-memory token buckets (`golang.org/x/time/rate`, needs approval) work for one API instance. With several instances, use a Postgres table
+- Storage: in-memory token buckets (`golang.org/x/time/rate`, approved, D-16) work for one API instance. With several instances, use a Postgres table
   or sticky limits (Q-10).
-- No account lockout (it lets attackers lock users out). Use throttling plus generic errors.
+- No account lockout (it lets attackers lock users out). Use throttling plus generic errors. Trade-off (DECISIONS D-24): because change-password
+  and delete-me share the login buckets, someone holding a stolen access token can throttle login for that email until the bucket refills (≤ 15 min).
 - Behind a proxy, trust `X-Forwarded-For` only from the configured proxy (host OPEN).
 
 ## 6. Clients
@@ -142,20 +147,23 @@ Google Play also requires a web path to request deletion (web app, session 3).
 
 ## 9. Test checklist (Go integration tests against real Postgres)
 
-- [ ] Register → 201 with a token pair. Duplicate email in any case (`A@x.com` vs `a@x.com`) → 409.
-- [ ] Weak/short/too-long password → 422 `weak_password`.
-- [ ] Login with the correct password → 200. Wrong password and unknown email → identical 401 body. Timing roughly equal (smoke test).
-- [ ] Stored hash is a PHC Argon2id string. The plaintext never appears in the DB or logs.
-- [ ] Access token with a wrong signature / `alg: none` / wrong `aud` / expired → 401.
-- [ ] Refresh rotates: the old token is marked used, the new one works.
-- [ ] Re-using a used refresh token → 401 and the whole session revoked (the successor stops working too).
-- [ ] Concurrent refresh behaviour matches the Q-8 decision.
-- [ ] Logout revokes only that session. Logout-all revokes every session.
-- [ ] Password change revokes other sessions but not the current one.
-- [ ] Rate limits trigger 429 with `Retry-After` and reset after the window.
-- [ ] `DELETE /v1/me` with a wrong password → 401. With the right one, all user rows are gone and the tokens are dead.
-- [ ] Protected endpoint without a token → 401. With user A's token on user B's resource → 404.
-- [ ] Session past its absolute lifetime → refresh fails.
+Implemented in `apps/api/internal/apitest/auth/` unless another path is given.
+
+- [x] Register → 201 with a token pair. Duplicate email in any case (`A@x.com` vs `a@x.com`) → 409. (`register_login_test.go`)
+- [x] Weak/short/too-long password → 422 `weak_password`. (`register_login_test.go`)
+- [x] Login with the correct password → 200. Wrong password and unknown email → identical 401 body. Timing roughly equal (smoke test). (`register_login_test.go`)
+- [x] Stored hash is a PHC Argon2id string. The plaintext never appears in the DB or logs. (`register_login_test.go`; logs: `TestNoSecretsInLogs` in `ratelimit_test.go`)
+- [x] Access token with a wrong signature / `alg: none` / wrong `aud` / expired → 401. (`tokens_test.go`)
+- [x] Refresh rotates: the old token is marked used, the new one works. (`refresh_test.go`)
+- [x] Re-using a used refresh token → 401 and the whole session revoked (the successor stops working too). (`refresh_test.go`)
+- [x] Concurrent refresh behaviour matches the Q-8 decision. (`refresh_test.go`)
+- [x] Logout revokes only that session. Logout-all revokes every session. (`sessions_test.go`)
+- [x] Password change revokes other sessions but not the current one. (`sessions_test.go`)
+- [x] Rate limits trigger 429 with `Retry-After` and reset after the window. (`ratelimit_test.go`; refresh: `refresh_test.go`; change password: `sessions_test.go`)
+- [x] `DELETE /v1/me` with a wrong password → 401. With the right one, all user rows are gone and the tokens are dead. (`sessions_test.go`)
+- [x] Protected endpoint without a token → 401. With user A's token on user B's resource → 404. (`tokens_test.go`; the 404 cases live in each
+  domain slice: `apitest/accounts/accounts_test.go`, `apitest/transactions/transactions_test.go`, `apitest/budgets/budgets_test.go`, plus dashboard and export; e.g. `TestAuthorization`, `TestBudgetsAuthorization`)
+- [x] Session past its absolute lifetime → refresh fails. (`refresh_test.go`)
 
 ## 10. Known trade-offs
 
@@ -163,19 +171,22 @@ Google Play also requires a web path to request deletion (web app, session 3).
   exists, register can always answer "check your inbox".
 - **No reset without email:** a forgotten password means a lost account until an email provider is chosen. This blocks the public launch.
 
-## 11. Open questions
+## 11. Questions and resolutions
 
-| # | Question |
-| --- | --- |
-| Q-1 | Final Argon2id parameters (measure on the chosen host). Unicode NFC normalisation: yes/no |
-| Q-2 | Access token lifetime (proposal 15 min) |
-| Q-3 | Signing: HS256 shared secret vs EdDSA key pair |
-| Q-4 | Refresh idle (30 d) and absolute session (90 d) lifetimes. Sliding vs fixed |
-| Q-5 | Stateless access tokens vs per-request session check |
-| Q-6 | Accept register-time enumeration in MVP, or require verification first |
-| Q-7 | Email provider (DECISIONS D-OPEN-2): needed for reset + verification. Is login blocked until verified? |
-| Q-8 | Refresh concurrency: client-only serialisation, or a server grace window too |
-| Q-9 | MFA / passkeys / Google sign-in after MVP? (Google sign-in would reintroduce a third party) |
-| Q-10 | Rate-limit storage: in-memory (single instance) vs Postgres |
-| Q-11 | Web token transport (a/b/c in §6) (DECISIONS D-OPEN-6) |
-| Q-12 | JWT library (needs approval) vs a minimal stdlib implementation |
+The reasoning and who decided each one are in `docs/DECISIONS.md` → "Auth questions". Rows marked "review needed" there took the
+default from this document.
+
+| # | Question | Resolution |
+| --- | --- | --- |
+| Q-1 | Final Argon2id parameters (measure on the chosen host). Unicode NFC normalisation: yes/no | Resolved: DECISIONS.md Q-1 and Q-1 (NFC) |
+| Q-2 | Access token lifetime (proposal 15 min) | Resolved: DECISIONS.md Q-2 |
+| Q-3 | Signing: HS256 shared secret vs EdDSA key pair | Resolved: DECISIONS.md Q-3 |
+| Q-4 | Refresh idle (30 d) and absolute session (90 d) lifetimes. Sliding vs fixed | Resolved: DECISIONS.md Q-4 |
+| Q-5 | Stateless access tokens vs per-request session check | Resolved: DECISIONS.md Q-5 |
+| Q-6 | Accept register-time enumeration in MVP, or require verification first | Resolved: DECISIONS.md Q-6 |
+| Q-7 | Email provider (DECISIONS D-OPEN-2): needed for reset + verification. Is login blocked until verified? | Partly resolved: DECISIONS.md Q-7 (provider still OPEN, D-OPEN-2) |
+| Q-8 | Refresh concurrency: client-only serialisation, or a server grace window too | Resolved: DECISIONS.md Q-8 |
+| Q-9 | MFA / passkeys / Google sign-in after MVP? (Google sign-in would reintroduce a third party) | Deferred: DECISIONS.md Q-9 |
+| Q-10 | Rate-limit storage: in-memory (single instance) vs Postgres | Resolved: DECISIONS.md Q-10 |
+| Q-11 | Web token transport (a/b/c in §6) (DECISIONS D-OPEN-6) | Still OPEN: DECISIONS.md Q-11 / D-OPEN-6 (web session) |
+| Q-12 | JWT library (needs approval) vs a minimal stdlib implementation | Resolved: DECISIONS.md Q-12 |
