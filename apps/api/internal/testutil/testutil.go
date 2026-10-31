@@ -90,7 +90,7 @@ type Clock struct {
 	t  time.Time
 }
 
-func (c *Clock) Now() time.Time         { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *Clock) Now() time.Time          { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
 func (c *Clock) Advance(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
 
 // Server is a running test API.
