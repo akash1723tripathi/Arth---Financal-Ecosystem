@@ -1,0 +1,9 @@
+packages:
+  - apps/mobile
+  - apps/web
+  - packages/*
+
+# Hoisted (npm-style) node_modules. Required for the Expo app: with pnpm's isolated layout Metro could not
+# resolve NativeWind's transitive `react-native-css-interop/jsx-runtime` and bundling was extremely slow.
+# This is the fallback documented in the Expo monorepo guide.
+nodeLinker: hoisted

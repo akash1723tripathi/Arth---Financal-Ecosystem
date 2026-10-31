@@ -1,0 +1,19 @@
+openapi: 3.1.0
+info:
+  title: Arth API
+  version: 0.0.0
+  description: >
+    Single source of truth for the Arth HTTP contract. Empty skeleton: endpoints are added
+    here first (see docs/API.md), then Go stubs (oapi-codegen) and the TS client are regenerated.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+paths: {}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+security:
+  - bearerAuth: []
