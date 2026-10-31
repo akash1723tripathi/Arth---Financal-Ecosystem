@@ -37,6 +37,13 @@ RETURNING *;
 DELETE FROM transactions WHERE id = @id AND user_id = @user_id
 RETURNING account_id, delta_minor, transfer_id;
 
+-- name: DeleteTransferPeer :many
+-- Deleting one transfer leg deletes the whole transfer (docs/API.md): removes the other leg(s) sharing
+-- transfer_id and returns what the caller needs to reverse each balance.
+DELETE FROM transactions
+WHERE user_id = @user_id AND transfer_id = @transfer_id AND id <> @id
+RETURNING account_id, delta_minor;
+
 -- name: ListTransactions :many
 -- Keyset page ordered occurred_on DESC, created_at DESC, id DESC. Every filter is optional (NULL = no filter).
 -- Cursor: pass all three cursor_* values (the last row of the previous page) or none. Fetch row_limit = limit+1

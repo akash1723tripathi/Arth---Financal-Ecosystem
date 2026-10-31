@@ -37,6 +37,45 @@ func (q *Queries) DeleteTransaction(ctx context.Context, arg DeleteTransactionPa
 	return i, err
 }
 
+const deleteTransferPeer = `-- name: DeleteTransferPeer :many
+DELETE FROM transactions
+WHERE user_id = $1 AND transfer_id = $2 AND id <> $3
+RETURNING account_id, delta_minor
+`
+
+type DeleteTransferPeerParams struct {
+	UserID     uuid.UUID
+	TransferID *uuid.UUID
+	ID         uuid.UUID
+}
+
+type DeleteTransferPeerRow struct {
+	AccountID  uuid.UUID
+	DeltaMinor int64
+}
+
+// Deleting one transfer leg deletes the whole transfer (docs/API.md): removes the other leg(s) sharing
+// transfer_id and returns what the caller needs to reverse each balance.
+func (q *Queries) DeleteTransferPeer(ctx context.Context, arg DeleteTransferPeerParams) ([]DeleteTransferPeerRow, error) {
+	rows, err := q.db.Query(ctx, deleteTransferPeer, arg.UserID, arg.TransferID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeleteTransferPeerRow{}
+	for rows.Next() {
+		var i DeleteTransferPeerRow
+		if err := rows.Scan(&i.AccountID, &i.DeltaMinor); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const exportTransactions = `-- name: ExportTransactions :many
 SELECT t.id, t.occurred_on, t.type, t.amount_minor, t.currency, t.description, t.input_method,
        t.created_at,
