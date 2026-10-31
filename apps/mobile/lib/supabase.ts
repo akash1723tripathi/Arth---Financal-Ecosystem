@@ -9,7 +9,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-// Plain anon client — not used much in Welth since almost everything is private,
+// Plain anon client — not used much in Arth since almost everything is private,
 // but kept around for any public/unauthenticated reads later.
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 

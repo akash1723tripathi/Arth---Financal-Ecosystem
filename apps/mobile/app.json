@@ -1,21 +1,22 @@
 {
   "expo": {
-    "name": "Welth",
-    "slug": "welth",
+    "name": "Arth",
+    "slug": "arth",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "welth",
+    "scheme": "arth",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.piyusheon.welth",
+      "bundleIdentifier": "fyi.akashbuilds.arth",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "fyi.akashbuilds.arth",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -47,20 +48,20 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Welth to access your photos to set a profile picture or scan a receipt.",
-          "cameraPermission": "Allow Welth to access your camera to scan receipts."
+          "photosPermission": "Allow Arth to access your photos to set a profile picture or scan a receipt.",
+          "cameraPermission": "Allow Arth to access your camera to scan receipts."
         }
       ],
       [
         "expo-audio",
         {
-          "microphonePermission": "Allow Welth to access your microphone to log transactions by voice."
+          "microphonePermission": "Allow Arth to access your microphone to log transactions by voice."
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Welth to access your camera to scan receipts."
+          "cameraPermission": "Allow Arth to access your camera to scan receipts."
         }
       ],
       "expo-asset",

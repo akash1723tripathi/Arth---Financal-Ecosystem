@@ -84,7 +84,7 @@ export async function askAssistant(
 
   const context = buildContext(transactions, budget, currency);
 
-  const prompt = `You are a helpful personal finance assistant inside the Welth app. Answer the user's question using only the financial data below. Be concise and specific with numbers. If the data doesn't answer the question, say so.
+  const prompt = `You are a helpful personal finance assistant inside the Arth app. Answer the user's question using only the financial data below. Be concise and specific with numbers. If the data doesn't answer the question, say so.
 
 ${context}
 
