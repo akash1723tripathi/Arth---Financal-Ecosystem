@@ -1233,7 +1233,8 @@ components:
       properties:
         status:
           type: string
-          enum: [ok]
+          description: "`ok` from /healthz, `ready` from /readyz."
+          enum: [ok, ready]
 
     # ------------------------------------------------------------ auth
     RegisterRequest:
