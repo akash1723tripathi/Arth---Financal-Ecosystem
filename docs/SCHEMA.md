@@ -1,7 +1,7 @@
 # Database schema
 
-The source of truth will be goose migrations in `apps/api/db/migrations/`. The SQL below shows the **target**
-design. Adjust it in the migration files, then update this doc.
+The source of truth is the goose migrations in `apps/api/db/migrations/` (§3). The SQL in this doc mirrors them for reading
+(§3.1) or shows planned tables (`auth_tokens` at the end of §3.1, post-MVP tables in §3.2). Change the migration files first, then update this doc.
 
 ## 1. Current schema (Welth, `legacy/scripts/schema.sql`, hosted on Supabase)
 
@@ -31,9 +31,19 @@ the optional dev-data port is in §7.
   Production must run the same major version (host is OPEN).
 - **Secrets at rest:** passwords are stored only as Argon2id hashes. Refresh/verification/reset tokens are stored only as SHA-256 hashes.
 
-## 3. Target schema
+## 3. Schema
 
-### 3.1 MVP baseline migration
+**The migrations are now the source of truth.** If this section and a migration disagree, the migration wins. Fix this doc.
+
+| File | Contents |
+| --- | --- |
+| `apps/api/db/migrations/00001_init.sql` | MVP baseline: `users`, `sessions`, `refresh_tokens`, `categories`, `accounts`, `transactions`, `budgets`, `notifications` with their indexes and constraints |
+| `apps/api/db/migrations/00002_seed_categories.sql` | The 21 system categories (data, idempotent) |
+
+Migrations are embedded in the binary and applied with `api migrate up` (goose as a library, D-18). `/readyz` reports
+`migrations_pending` when the database is behind the binary.
+
+### 3.1 MVP baseline migration (`00001_init.sql`)
 
 ```sql
 -- users ---------------------------------------------------------------
@@ -65,7 +75,7 @@ CREATE TABLE sessions (
   ip             inet,
   created_at     timestamptz NOT NULL DEFAULT now(),
   last_used_at   timestamptz NOT NULL DEFAULT now(),
-  expires_at     timestamptz NOT NULL,               -- absolute lifetime (e.g. created_at + 90 days; OPEN in AUTH.md)
+  expires_at     timestamptz NOT NULL,               -- absolute lifetime (created_at + 90 days, DECISIONS Q-4)
   revoked_at     timestamptz,
   revoke_reason  text CHECK (revoke_reason IN ('LOGOUT','LOGOUT_ALL','REFRESH_REUSE','PASSWORD_CHANGED','ACCOUNT_DELETED','ADMIN'))
 );
@@ -77,14 +87,14 @@ CREATE TABLE refresh_tokens (
   session_id    uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   token_hash    bytea NOT NULL UNIQUE,              -- SHA-256 of the opaque 256-bit token
   created_at    timestamptz NOT NULL DEFAULT now(),
-  expires_at    timestamptz NOT NULL,               -- idle lifetime (e.g. 30 days)
+  expires_at    timestamptz NOT NULL,               -- idle lifetime (30 days, renewed on rotation, DECISIONS Q-4)
   used_at       timestamptz,                        -- set on rotation; presenting it again = reuse → revoke session
   replaced_by   uuid REFERENCES refresh_tokens(id) ON DELETE SET NULL
 );
 CREATE INDEX refresh_tokens_session_idx ON refresh_tokens (session_id);
 ```
 
-Planned with the email-provider decision (OPEN), so not in the first migration:
+**Still planned, not created by any migration yet:** `auth_tokens` comes with the email-provider decision (D-OPEN-2):
 
 ```sql
 -- one-time tokens for email verification and password reset ----------
@@ -100,13 +110,13 @@ CREATE TABLE auth_tokens (
 CREATE INDEX auth_tokens_user_purpose_idx ON auth_tokens (user_id, purpose) WHERE used_at IS NULL;
 ```
 
-Rate-limit state for login/register is in memory for a single API instance, or in a Postgres table if several run.
-That choice is an open question in `docs/AUTH.md` §5.
+Rate-limit state for login/register is in memory (single API instance, decided in `docs/DECISIONS.md` Q-10). It moves to a
+Postgres table before more than one instance runs, so there is no table for it yet.
 
 ```sql
 
 -- categories ------------------------------------------------------------
--- System categories: user_id NULL + stable key (seeded from the 21 Welth keys).
+-- System categories: user_id NULL + stable key (the 21 keys, seeded in 00002).
 -- Custom categories (post-MVP UI): user_id set, key NULL.
 CREATE TABLE categories (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -151,7 +161,7 @@ CREATE TABLE transactions (
   type             text NOT NULL CHECK (type IN ('INCOME','EXPENSE','TRANSFER_IN','TRANSFER_OUT')),
   amount_minor     bigint NOT NULL CHECK (amount_minor > 0 AND amount_minor <= 999999999999999),
   currency         char(3) NOT NULL,
-  delta_minor      bigint GENERATED ALWAYS AS (
+  delta_minor      bigint NOT NULL GENERATED ALWAYS AS (
                      CASE WHEN type IN ('INCOME','TRANSFER_IN') THEN amount_minor ELSE -amount_minor END
                    ) STORED,
   occurred_on      date NOT NULL,
@@ -186,7 +196,7 @@ CREATE TABLE budgets (
   alert_thresholds  smallint[] NOT NULL DEFAULT '{80,100}',
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now(),
-  UNIQUE NULLS NOT DISTINCT (user_id, category_id, period)
+  CONSTRAINT budgets_user_category_period_uq UNIQUE NULLS NOT DISTINCT (user_id, category_id, period)
 );
 
 -- notifications (dedupe ledger + audit for emails/push) -----------------
@@ -208,11 +218,16 @@ CREATE TABLE notifications (
 CREATE INDEX notifications_user_created_idx ON notifications (user_id, created_at DESC);
 ```
 
-Also in the baseline:
+Around the baseline:
 
-- **Job-queue tables:** if River is confirmed, generate its tables with `river migrate-get --up --all` and commit them as a goose migration, so goose owns all DDL.
-- **Seed:** the 21 system categories (same keys as `constants/categories.ts`) live in a goose migration (data, idempotent `ON CONFLICT (key) WHERE user_id IS NULL DO NOTHING`).
-- **Roles:** `arth_migrator` (DDL) and `arth_app` (DML on app tables + job-queue tables only). The API and worker connect as `arth_app`.
+- **Job-queue tables: not created.** The queue library is still OPEN (D-OPEN-9; `cmd/worker` is a stub, D-22). If River is confirmed,
+  generate its tables with `river migrate-get --up --all` and commit them as a goose migration, so goose owns all DDL.
+- **Seed (done):** `00002_seed_categories.sql` inserts the 21 system categories (same keys and kinds as `apps/mobile/constants/categories.ts`;
+  names, emoji icons and colours copied from Welth, see `docs/MIGRATION.md` §7). Idempotent: `ON CONFLICT (key) WHERE user_id IS NULL DO NOTHING`.
+  `sort_order`: expenses 10–150, income 210–260, "other" last in each kind.
+- **Roles: not created yet (TODO at hosting time).** `arth_migrator` (DDL) and `arth_app` (DML on app tables + job-queue tables only); the API
+  and worker will connect as `arth_app`. Creating roles needs a superuser and per-environment secrets, so it happens when hosting is set up
+  (D-OPEN-3), not in goose. Locally everything runs as the docker-compose user.
 
 Changes from Welth: `status`, `is_flagged` and `flag_reason` are dropped (never written). Reintroduce them with a real feature.
 The starting balance becomes `opening_balance_minor`. Budget alert state moves to `notifications`.
@@ -321,14 +336,16 @@ DELETE FROM transactions WHERE id = @id AND user_id = @user_id RETURNING account
 
 | Operation | Steps inside the tx |
 | --- | --- |
-| Create | `LockAccount` (404 if missing, 409 if archived or currency ≠) → validate category → `InsertTransaction` → `ApplyBalanceDelta(+delta)` (must affect 1 row) → enqueue the budget-check job in the same tx → commit |
-| Delete | `DeleteTransaction … RETURNING` → `ApplyBalanceDelta(-delta)`. If `transfer_id`, delete the other leg too and reverse its delta |
-| Update | `SELECT … FOR UPDATE` on the old row → lock the old and new accounts **in ascending id order** (prevents deadlocks) → reverse the old delta → update the row → apply the new delta |
-| Transfer | Lock both accounts in id order → insert `TRANSFER_OUT` + `TRANSFER_IN` with the same `transfer_id` → two deltas |
+| Create | `LockAccount` (404 if missing, 409 if archived; the currency is copied from the account) → validate category → `InsertTransaction` → `ApplyBalanceDelta(+delta)` (must affect 1 row) → enqueue the budget-check job in the same tx (**not yet**: `TODO(D-OPEN-9)`, no queue exists) → commit |
+| Delete | `DeleteTransaction … RETURNING` → `ApplyBalanceDelta(-delta)`. If `transfer_id`, `DeleteTransferPeer` deletes the other leg(s) and each delta is reversed |
+| Update | `SELECT … FOR UPDATE` on the old row → lock the old and new accounts **in ascending id order** (`LockAccounts`, prevents deadlocks; 409 `currency_mismatch` if the new account's currency differs) → reverse the old delta → update the row → apply the new delta → budget-check enqueue (`TODO(D-OPEN-9)`) |
+| Transfer | **Not creatable yet** (D-21; no endpoint). Planned: lock both accounts in id order → insert `TRANSFER_OUT` + `TRANSFER_IN` with the same `transfer_id` → two deltas |
 | Onboarding | Update user (currency, timezone, `onboarded_at`) → set the default account's `opening_balance_minor` and `balance_minor += opening` |
-| Delete account | `DELETE FROM accounts WHERE id AND user_id` (cascades transactions). Transfer peers in other accounts are deleted and reversed first |
+| Make default | `LockUserAccounts` locks **all** of the user's accounts (ascending id, same order as `LockAccounts`) to serialise concurrent default changes → no-op if already default → `ClearDefaultAccount` → `SetDefaultAccount` (the one-default partial unique index is not deferrable) |
+| Delete account | `LockAccount` → 409 `default_account` / `account_has_transactions` (unless `cascade=true`) → `DELETE FROM accounts WHERE id AND user_id` (cascades transactions). Planned once transfers exist: delete and reverse peer legs in other accounts first (not implemented; no transfers can exist yet) |
 
-Guards: integration tests assert the invariant after every service test. The weekly `balance_reconcile` job logs any drift.
+Guards: integration tests assert the invariant (`testutil.AssertBalance`: cached balance = opening + Σ deltas) after the writes. The weekly
+`balance_reconcile` job that logs drift is planned with the worker (D-OPEN-9), not built.
 Isolation is READ COMMITTED (default). That is safe because of the row locks and relative updates.
 
 ## 6. Key read queries (sketch)

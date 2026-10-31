@@ -1,19 +1,1814 @@
 openapi: 3.1.0
 info:
   title: Arth API
-  version: 0.0.0
-  description: >
-    Single source of truth for the Arth HTTP contract. Empty skeleton: endpoints are added
-    here first (see docs/API.md), then Go stubs (oapi-codegen) and the TS client are regenerated.
+  version: 0.1.0
+  summary: Personal finance tracker API (accounts, transactions, budgets, reports).
+  description: |
+    Single source of truth for the Arth HTTP contract (`docs/API.md` is the human overview).
+    Change this file first, then regenerate the Go stubs (oapi-codegen) and the TS client.
+
+    ## Conventions
+    - JSON, UTF-8, `snake_case`. Unknown request fields are rejected with `400 bad_request`.
+      Responses may gain fields at any time: clients must ignore unknown fields.
+    - Authentication: `Authorization: Bearer <access token>` on everything except `/healthz`, `/readyz`
+      and `POST /v1/auth/register|login|refresh`. Missing, invalid or expired token → `401 unauthorized`.
+    - Ownership: the server derives the user from the token. Clients never send a `user_id`.
+      Another user's resource is reported as `404 not_found`.
+    - Money: `*_minor` integers in minor units of `currency` (ISO 4217). Never decimals or floats.
+      Transaction amounts satisfy `0 < amount_minor ≤ 999 999 999 999 999` (safe in JS numbers).
+    - Dates `YYYY-MM-DD` (calendar day in the user's timezone; ranges are inclusive), months `YYYY-MM`,
+      timestamps RFC 3339 UTC.
+    - Single resources are returned bare. Collections are `{"data": [...]}`; paginated collections add
+      `"next_cursor": string | null` (opaque keyset cursor; send the same filters with it).
+    - Errors are RFC 9457 `application/problem+json` with a stable machine-readable `code`.
+      Schema violations → `422 validation_failed` with `errors[{field, message}]`; malformed JSON or an
+      unknown field → `400 bad_request`.
+    - Every response carries `X-Request-Id` (echoed when the client sends one).
 servers:
   - url: http://localhost:8080
     description: Local development
-paths: {}
+security:
+  - bearerAuth: []
+tags:
+  - name: system
+    description: Liveness and readiness probes.
+  - name: auth
+    description: Own authentication (docs/AUTH.md). Short-lived JWT access token + rotating opaque refresh token.
+  - name: me
+    description: The signed-in user.
+  - name: categories
+    description: System (and later custom) income/expense categories.
+  - name: accounts
+    description: Money accounts (cash, bank, card, savings) with a cached balance.
+  - name: transactions
+    description: Income and expense entries. Every write updates the account balance in the same DB transaction.
+  - name: budgets
+    description: Monthly overall and per-category budgets with progress.
+  - name: reports
+    description: Dashboard and chart data. Transfers are excluded from all income/expense aggregates.
+  - name: ai
+    description: AI-assisted entry. Nothing is persisted; the client reviews the result and then creates a transaction.
+
+paths:
+  # ---------------------------------------------------------------- system
+  /healthz:
+    get:
+      operationId: getHealthz
+      tags: [system]
+      summary: Liveness probe
+      description: Returns 200 while the process is up. Does not touch the database.
+      security: []
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /readyz:
+    get:
+      operationId: getReadyz
+      tags: [system]
+      summary: Readiness probe
+      description: Pings the database and checks that migrations are at the expected version.
+      security: []
+      responses:
+        '200':
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  # ---------------------------------------------------------------- auth
+  /v1/auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Create an account
+      description: |
+        Creates the user, the default "Cash" account and a session in one DB transaction and returns a token pair.
+        The user starts with `needs_onboarding: true`. The password policy (8–128 characters, not a common
+        password) is enforced by the server and reported as `422 weak_password`. An existing email
+        (case-insensitive) → `409 email_taken`. Rate-limited per IP (5/hour).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Registered and signed in.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Sign in with email and password
+      description: |
+        Creates a new session for this device/browser. A wrong email and a wrong password return the same
+        `401 invalid_credentials` (and take the same time). Rate-limited per IP and per email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/auth/refresh:
+    post:
+      operationId: refreshToken
+      tags: [auth]
+      summary: Rotate the refresh token
+      description: |
+        Exchanges a refresh token for a new token pair. The presented token becomes used. Presenting a used
+        token again is treated as theft: the whole session is revoked. Unknown, expired, revoked or reused
+        tokens → `401 refresh_invalid` (the client must sign out). Clients should serialise refreshes
+        (one in-flight refresh at a time).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: New token pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Sign out this session
+      description: |
+        Revokes the session that owns `refresh_token` (it must belong to the authenticated user). Its access
+        tokens stop working immediately (every request checks the session). An unknown or foreign token → `204`
+        and nothing happens. The client deletes its stored tokens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '204':
+          description: Session revoked (also returned when it was already revoked).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/auth/logout-all:
+    post:
+      operationId: logoutAll
+      tags: [auth]
+      summary: Sign out everywhere
+      description: Revokes every session of the user, including the current one.
+      responses:
+        '204':
+          description: All sessions revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/auth/password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change the password
+      description: |
+        Verifies `current_password`, stores the new hash and revokes all **other** sessions. The current
+        session continues. Wrong current password → `401 invalid_credentials` (not a session problem:
+        clients must not refresh/sign out on this code). New password fails the policy → `422 weak_password`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: Password changed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  # ---------------------------------------------------------------- me
+  /v1/me:
+    get:
+      operationId: getMe
+      tags: [me]
+      summary: Get the current user
+      responses:
+        '200':
+          description: The current user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+    patch:
+      operationId: updateMe
+      tags: [me]
+      summary: Update profile and preferences
+      description: |
+        Partial update: omitted fields are unchanged; `null` is not accepted. `currency` must be a supported
+        ISO 4217 code and `timezone` a valid IANA zone (`422 validation_failed` otherwise). Changing the
+        default currency does not change existing accounts. Changing it after the user has any transaction →
+        `409 currency_locked`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMeRequest'
+      responses:
+        '200':
+          description: The updated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteMe
+      tags: [me]
+      summary: Delete the account and all data
+      description: |
+        Re-verifies the password, then deletes the user and everything they own (accounts, transactions,
+        budgets, sessions) in one DB transaction. Irreversible. Wrong password → `401 invalid_credentials`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteMeRequest'
+      responses:
+        '204':
+          description: Deleted. All sessions are revoked.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/me/onboarding:
+    post:
+      operationId: completeOnboarding
+      tags: [me]
+      summary: Finish onboarding
+      description: |
+        Sets the user's default currency and timezone and the default account's currency and opening balance.
+        Allowed once: a repeat → `409 already_onboarded`. If the default account already has transactions its
+        currency cannot change → `409 currency_locked`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingRequest'
+      responses:
+        '200':
+          description: Onboarded; `needs_onboarding` is now false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  # ---------------------------------------------------------------- categories
+  /v1/categories:
+    get:
+      operationId: listCategories
+      tags: [categories]
+      summary: List categories
+      description: System categories plus the user's own (none in the MVP), ordered by `sort_order`. Archived ones are omitted.
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          description: Only categories of this kind.
+          schema:
+            $ref: '#/components/schemas/EntryType'
+      responses:
+        '200':
+          description: Categories.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  # ---------------------------------------------------------------- accounts
+  /v1/accounts:
+    get:
+      operationId: listAccounts
+      tags: [accounts]
+      summary: List accounts
+      description: All of the user's accounts, the default account first, then by `created_at`.
+      responses:
+        '200':
+          description: Accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+    post:
+      operationId: createAccount
+      tags: [accounts]
+      summary: Create an account
+      description: |
+        `currency` defaults to the user's currency (INR when the user has none yet) and must be a supported
+        ISO 4217 code. `opening_balance_minor` defaults to 0 and may be negative (e.g. a credit card).
+        The new account is never the default (use `make-default`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/accounts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      operationId: getAccount
+      tags: [accounts]
+      summary: Get an account
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    patch:
+      operationId: updateAccount
+      tags: [accounts]
+      summary: Rename or retype an account
+      description: Partial update. The currency and balances are not editable here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountRequest'
+      responses:
+        '200':
+          description: The updated account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteAccount
+      tags: [accounts]
+      summary: Delete an account
+      description: |
+        Deleting the default account → `409 default_account` (make another one the default first).
+        An account with transactions → `409 account_has_transactions` (extra member `transaction_count`)
+        unless `cascade=true`, which deletes its transactions too.
+      parameters:
+        - name: cascade
+          in: query
+          required: false
+          description: Also delete the account's transactions.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/accounts/{id}/make-default:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      operationId: makeDefaultAccount
+      tags: [accounts]
+      summary: Make this the default account
+      description: Exactly one account is the default; the previous default is unset in the same DB transaction.
+      responses:
+        '200':
+          description: The new default account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  # ---------------------------------------------------------------- transactions
+  /v1/transactions:
+    get:
+      operationId: listTransactions
+      tags: [transactions]
+      summary: List transactions
+      description: |
+        Newest first (`occurred_on desc, created_at desc, id desc`), keyset-paginated. Filters are AND-combined.
+        A cursor is only valid with the same filters it was issued for (otherwise `400 bad_request`).
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/TransactionType'
+        - name: account_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: category_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          required: false
+          description: First day, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: Last day, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: q
+          in: query
+          required: false
+          description: Case-insensitive substring match on the description.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of transactions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    post:
+      operationId: createTransaction
+      tags: [transactions]
+      summary: Create an income or expense
+      description: |
+        The currency is taken from the account (clients do not send it). The account balance is updated in the
+        same DB transaction and returned. Unknown account → `404 not_found`. The category must exist and match
+        `type` (`422 validation_failed` otherwise).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransactionRequest'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionWithAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/transactions/export:
+    get:
+      operationId: exportTransactions
+      tags: [transactions]
+      summary: Export transactions as CSV
+      description: |
+        Streams a `text/csv` attachment (UTF-8, header row) of the transactions in `[from, to]`, newest first.
+        Amounts are decimal strings in the transaction currency. The range may span at most 366 days
+        (`422 validation_failed` otherwise).
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [csv]
+            default: csv
+        - name: from
+          in: query
+          required: true
+          description: First day, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: Last day, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: account_id
+          in: query
+          required: false
+          description: Only this account.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: CSV file.
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="arth-transactions-<from>-<to>.csv"`'
+              required: true
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/transactions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      operationId: getTransaction
+      tags: [transactions]
+      summary: Get a transaction
+      responses:
+        '200':
+          description: The transaction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    patch:
+      operationId: updateTransaction
+      tags: [transactions]
+      summary: Edit a transaction
+      description: |
+        Partial update of any create field; omitted fields are unchanged, `null` is not accepted (send
+        `description: ""` to clear the description). Balances of the old and new account are adjusted in one
+        DB transaction; `accounts` lists every affected account (1 or 2). Moving to an account with a different
+        currency → `409 currency_mismatch`. Transfer legs cannot be edited here → `409 conflict`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTransactionRequest'
+      responses:
+        '200':
+          description: The updated transaction and affected accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionWithAccounts'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteTransaction
+      tags: [transactions]
+      summary: Delete a transaction
+      description: Reverses its effect on the account balance. A transfer leg deletes the whole transfer.
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  # ---------------------------------------------------------------- budgets
+  /v1/budgets:
+    get:
+      operationId: listBudgets
+      tags: [budgets]
+      summary: Budgets with progress for a month
+      description: The overall budget (if set) first, then category budgets. Spending counts EXPENSE transactions only.
+      parameters:
+        - $ref: '#/components/parameters/MonthQuery'
+      responses:
+        '200':
+          description: Budget progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetProgressList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/budgets/overall:
+    put:
+      operationId: putOverallBudget
+      tags: [budgets]
+      summary: Set the overall monthly budget
+      description: Creates or replaces the overall monthly budget. Its currency is the user's currency. Progress is for the current local month.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutBudgetRequest'
+      responses:
+        '200':
+          description: The budget with current-month progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetProgress'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteOverallBudget
+      tags: [budgets]
+      summary: Remove the overall monthly budget
+      responses:
+        '204':
+          description: Removed (also when none was set).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/budgets/categories/{category_id}:
+    parameters:
+      - name: category_id
+        in: path
+        required: true
+        description: An EXPENSE category visible to the user.
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: putCategoryBudget
+      tags: [budgets]
+      summary: Set a category's monthly budget
+      description: Creates or replaces the monthly budget of an EXPENSE category. Unknown category → `404`; an INCOME category → `422`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutBudgetRequest'
+      responses:
+        '200':
+          description: The budget with current-month progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetProgress'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteCategoryBudget
+      tags: [budgets]
+      summary: Remove a category's monthly budget
+      responses:
+        '204':
+          description: Removed (also when none was set).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  # ---------------------------------------------------------------- reports
+  /v1/dashboard:
+    get:
+      operationId: getDashboard
+      tags: [reports]
+      summary: Dashboard summary for a month
+      description: |
+        Totals in the user's currency for one month (default: the current month in the user's timezone):
+        total balance across accounts in that currency, month income/expense/net, overall budget progress,
+        expense by category (largest first) and the 5 most recent transactions.
+      parameters:
+        - $ref: '#/components/parameters/MonthQuery'
+      responses:
+        '200':
+          description: Dashboard data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/reports/daily:
+    get:
+      operationId: getDailyReport
+      tags: [reports]
+      summary: Daily income and expense totals
+      description: One row per day in `[from, to]`, zero-filled, oldest first. At most 93 days (`422` otherwise).
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: First day, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: Last day, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: account_id
+          in: query
+          required: false
+          description: Only this account (default is all accounts in the user's currency).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Daily totals.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyReport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  # ---------------------------------------------------------------- ai
+  /v1/ai/receipt-extractions:
+    post:
+      operationId: extractReceipt
+      tags: [ai]
+      summary: Extract a transaction draft from a receipt photo
+      description: |
+        Upload one image as the `file` part (JPEG, PNG, WebP or HEIC, at most 5 MB). Returns a draft the client
+        shows for review; nothing is stored. Any field the provider could not read is `null`. Wrong type →
+        `415`, too big → `413`, provider failure → `502 ai_unavailable`. A per-user rate limit is planned (not implemented yet).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ReceiptUpload'
+            encoding:
+              file:
+                contentType: image/jpeg, image/png, image/webp, image/heic
+      responses:
+        '200':
+          description: The extracted draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Extraction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/Validation'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/AIUnavailable'
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
-security:
-  - bearerAuth: []
+      description: Access token from `TokenPair.access_token` (short-lived; refresh with `/v1/auth/refresh`).
+
+  headers:
+    Location:
+      description: URL path of the created resource.
+      required: true
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds until the client may retry.
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      description: Resource id (UUID).
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor from a previous page's `next_cursor`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+    MonthQuery:
+      name: month
+      in: query
+      required: false
+      description: Calendar month `YYYY-MM`. Default is the current month in the user's timezone.
+      schema:
+        $ref: '#/components/schemas/Month'
+
+  responses:
+    BadRequest:
+      description: Malformed JSON, unknown field, missing body or bad cursor (`bad_request`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: |
+        `unauthorized` (missing/invalid/expired access token), `invalid_credentials` (wrong email or password)
+        or `refresh_invalid` (refresh token unknown, expired, revoked or reused).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: The resource does not exist or is not yours (`not_found`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: |
+        State conflict. Codes: `email_taken`, `conflict`, `account_has_transactions` (+ `transaction_count`),
+        `default_account`, `currency_locked`, `currency_mismatch`, `already_onboarded`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Validation:
+      description: |
+        `validation_failed` (schema or semantic violation; `errors[]` lists each field) or `weak_password`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: Upload over the limit (`payload_too_large`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnsupportedMediaType:
+      description: Upload or body type not allowed (`unsupported_media_type`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RateLimited:
+      description: Too many requests (`rate_limited`). Retry after `Retry-After` seconds.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AIUnavailable:
+      description: The AI provider failed or timed out after retries (`ai_unavailable`).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: Not ready (database unreachable or migrations behind).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Internal:
+      description: Unexpected server error (`internal`). Details are only in the server logs under `request_id`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    # ------------------------------------------------------------ primitives
+    Currency:
+      type: string
+      description: ISO 4217 alphabetic code from the supported allowlist (e.g. INR, USD, EUR, JPY).
+      pattern: '^[A-Z]{3}$'
+      examples: [INR]
+    Month:
+      type: string
+      description: Calendar month `YYYY-MM`.
+      pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+      examples: ['2026-10']
+    Timezone:
+      type: string
+      description: IANA time zone name (e.g. `Asia/Kolkata`). Validated by the server.
+      minLength: 1
+      maxLength: 64
+      examples: [Asia/Kolkata]
+    AmountMinor:
+      type: integer
+      format: int64
+      description: Positive amount in minor units of the currency (₹123.45 → 12345).
+      minimum: 1
+      maximum: 999999999999999
+    SignedAmountMinor:
+      type: integer
+      format: int64
+      description: Amount in minor units; may be negative (e.g. a credit-card balance).
+      minimum: -999999999999999
+      maximum: 999999999999999
+    ClientType:
+      type: string
+      description: The kind of client creating the session.
+      enum: [MOBILE, WEB]
+    EntryType:
+      type: string
+      description: Income or expense (category kind and the type of a manual entry).
+      enum: [INCOME, EXPENSE]
+    TransactionType:
+      type: string
+      description: Transaction type. `TRANSFER_IN`/`TRANSFER_OUT` are the two legs of a transfer.
+      enum: [INCOME, EXPENSE, TRANSFER_IN, TRANSFER_OUT]
+    InputMethod:
+      type: string
+      description: How a transaction was entered.
+      enum: [MANUAL, RECEIPT_SCAN, VOICE, RECURRING, IMPORT]
+    EntryInputMethod:
+      type: string
+      description: Input method a client may set on create/edit.
+      enum: [MANUAL, RECEIPT_SCAN, VOICE]
+    AccountType:
+      type: string
+      enum: [CASH, BANK, CREDIT_CARD, SAVINGS]
+
+    # ------------------------------------------------------------ errors
+    Problem:
+      type: object
+      description: RFC 9457 problem details. Switch on `code`; `title`/`detail` are for humans and may change.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          description: Problem type URI reference, `/problems/<code>`.
+          examples: [/problems/validation_failed]
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+        code:
+          type: string
+          description: Stable machine-readable error code (see docs/API.md §2).
+          examples: [validation_failed]
+        detail:
+          type: string
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+        request_id:
+          type: string
+      additionalProperties: true
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Body field path (`amount_minor`, `items.0.name`) or `<in>.<name>` for parameters (`query.limit`, `path.id`).
+        message:
+          type: string
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: "`ok` from /healthz, `ready` from /readyz."
+          enum: [ok, ready]
+
+    # ------------------------------------------------------------ auth
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, name, client]
+      properties:
+        email:
+          type: string
+          format: email
+          x-go-type: string
+          minLength: 3
+          maxLength: 254
+        password:
+          type: string
+          description: 8–128 characters (policy enforced by the server → `422 weak_password`).
+          minLength: 1
+          maxLength: 1024
+        name:
+          type: string
+          description: Display name (trimmed).
+          minLength: 1
+          maxLength: 100
+        client:
+          $ref: '#/components/schemas/ClientType'
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, client]
+      properties:
+        email:
+          type: string
+          format: email
+          x-go-type: string
+          minLength: 3
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        client:
+          $ref: '#/components/schemas/ClientType'
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          maxLength: 512
+    LogoutRequest:
+      type: object
+      additionalProperties: false
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          maxLength: 512
+    ChangePasswordRequest:
+      type: object
+      additionalProperties: false
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        new_password:
+          type: string
+          description: 8–128 characters (policy enforced by the server → `422 weak_password`).
+          minLength: 1
+          maxLength: 1024
+    TokenPair:
+      type: object
+      required: [access_token, access_expires_in, refresh_token, refresh_expires_at, user]
+      properties:
+        access_token:
+          type: string
+          description: JWT to send as a bearer token in the Authorization header.
+        access_expires_in:
+          type: integer
+          format: int32
+          description: Access-token lifetime in seconds.
+          examples: [900]
+        refresh_token:
+          type: string
+          description: Opaque single-use refresh token. Store securely (mobile secure storage).
+        refresh_expires_at:
+          type: string
+          format: date-time
+          description: When the refresh token expires if unused.
+        user:
+          $ref: '#/components/schemas/Me'
+
+    # ------------------------------------------------------------ me
+    Me:
+      type: object
+      required:
+        - id
+        - email
+        - email_verified
+        - name
+        - avatar_url
+        - currency
+        - timezone
+        - needs_onboarding
+        - email_budget_alerts
+        - email_weekly_tips
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          x-go-type: string
+          format: email
+        email_verified:
+          type: boolean
+        name:
+          type: [string, 'null']
+        avatar_url:
+          type: [string, 'null']
+          description: Always null until object storage is decided.
+        currency:
+          type: [string, 'null']
+          description: Default currency; null until onboarding.
+        timezone:
+          type: string
+          description: IANA time zone; "today" and "this month" use it.
+        needs_onboarding:
+          type: boolean
+        email_budget_alerts:
+          type: boolean
+        email_weekly_tips:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    UpdateMeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        currency:
+          $ref: '#/components/schemas/Currency'
+        timezone:
+          $ref: '#/components/schemas/Timezone'
+        email_budget_alerts:
+          type: boolean
+        email_weekly_tips:
+          type: boolean
+    OnboardingRequest:
+      type: object
+      additionalProperties: false
+      required: [currency, timezone, opening_balance_minor]
+      properties:
+        currency:
+          $ref: '#/components/schemas/Currency'
+        timezone:
+          $ref: '#/components/schemas/Timezone'
+        opening_balance_minor:
+          $ref: '#/components/schemas/SignedAmountMinor'
+    DeleteMeRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+
+    # ------------------------------------------------------------ categories
+    Category:
+      type: object
+      required: [id, key, name, kind, icon, color, is_system]
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: [string, 'null']
+          description: Stable key of a system category (e.g. `groceries`); null for custom ones.
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/EntryType'
+        icon:
+          type: [string, 'null']
+          description: Icon name understood by the clients.
+        color:
+          type: [string, 'null']
+          description: '`#RRGGBB`.'
+        is_system:
+          type: boolean
+    CategoryList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+
+    # ------------------------------------------------------------ accounts
+    Account:
+      type: object
+      required: [id, name, type, currency, balance_minor, opening_balance_minor, is_default, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          type: string
+        balance_minor:
+          type: integer
+          format: int64
+          description: Opening balance plus all transaction deltas (may be negative).
+        opening_balance_minor:
+          type: integer
+          format: int64
+        is_default:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    AccountList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+    CreateAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        type:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          $ref: '#/components/schemas/Currency'
+        opening_balance_minor:
+          $ref: '#/components/schemas/SignedAmountMinor'
+    UpdateAccountRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        type:
+          $ref: '#/components/schemas/AccountType'
+
+    # ------------------------------------------------------------ transactions
+    Transaction:
+      type: object
+      required:
+        - id
+        - account_id
+        - category_id
+        - type
+        - amount_minor
+        - currency
+        - occurred_on
+        - description
+        - input_method
+        - voice_transcript
+        - transfer_id
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        category_id:
+          type: [string, 'null']
+          format: uuid
+          description: Null only for transfer legs.
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        amount_minor:
+          type: integer
+          format: int64
+          description: Always positive; the sign comes from `type`.
+        currency:
+          type: string
+        occurred_on:
+          type: string
+          format: date
+        description:
+          type: [string, 'null']
+        input_method:
+          $ref: '#/components/schemas/InputMethod'
+        voice_transcript:
+          type: [string, 'null']
+        transfer_id:
+          type: [string, 'null']
+          format: uuid
+          description: Shared by both legs of a transfer.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TransactionPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+        next_cursor:
+          type: [string, 'null']
+          description: Cursor for the next page; null on the last page.
+    TransactionWithAccount:
+      type: object
+      required: [transaction, account]
+      properties:
+        transaction:
+          $ref: '#/components/schemas/Transaction'
+        account:
+          $ref: '#/components/schemas/Account'
+    TransactionWithAccounts:
+      type: object
+      required: [transaction, accounts]
+      properties:
+        transaction:
+          $ref: '#/components/schemas/Transaction'
+        accounts:
+          type: array
+          description: Every account whose balance changed (1, or 2 when the account was changed).
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/Account'
+    CreateTransactionRequest:
+      type: object
+      additionalProperties: false
+      required: [account_id, category_id, type, amount_minor, occurred_on]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        category_id:
+          type: string
+          format: uuid
+          description: A category whose `kind` equals `type`.
+        type:
+          $ref: '#/components/schemas/EntryType'
+        amount_minor:
+          $ref: '#/components/schemas/AmountMinor'
+        occurred_on:
+          type: string
+          format: date
+          description: Calendar day in the user's timezone.
+        description:
+          type: string
+          maxLength: 200
+        input_method:
+          $ref: '#/components/schemas/EntryInputMethod'
+        voice_transcript:
+          type: string
+          maxLength: 2000
+    UpdateTransactionRequest:
+      type: object
+      additionalProperties: false
+      description: All fields optional; omitted = unchanged. Send an empty description string to clear it.
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        category_id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/EntryType'
+        amount_minor:
+          $ref: '#/components/schemas/AmountMinor'
+        occurred_on:
+          type: string
+          format: date
+        description:
+          type: string
+          maxLength: 200
+        input_method:
+          $ref: '#/components/schemas/EntryInputMethod'
+        voice_transcript:
+          type: string
+          maxLength: 2000
+
+    # ------------------------------------------------------------ budgets
+    PutBudgetRequest:
+      type: object
+      additionalProperties: false
+      required: [amount_minor]
+      properties:
+        amount_minor:
+          $ref: '#/components/schemas/AmountMinor'
+    BudgetProgress:
+      type: object
+      required: [id, category_id, amount_minor, currency, month, spent_minor, remaining_minor, percent_used]
+      properties:
+        id:
+          type: string
+          format: uuid
+        category_id:
+          type: [string, 'null']
+          format: uuid
+          description: Null for the overall budget.
+        amount_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        month:
+          $ref: '#/components/schemas/Month'
+        spent_minor:
+          type: integer
+          format: int64
+          description: EXPENSE total of the month in the budget currency.
+        remaining_minor:
+          type: integer
+          format: int64
+          description: amount − spent; negative when over budget.
+        percent_used:
+          type: integer
+          format: int32
+          description: floor(spent × 100 / amount); may exceed 100.
+    BudgetProgressList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BudgetProgress'
+
+    # ------------------------------------------------------------ reports
+    MonthTotals:
+      type: object
+      required: [income_minor, expense_minor, net_minor]
+      properties:
+        income_minor:
+          type: integer
+          format: int64
+        expense_minor:
+          type: integer
+          format: int64
+        net_minor:
+          type: integer
+          format: int64
+          description: income − expense.
+    CategoryAmount:
+      type: object
+      required: [category_id, amount_minor]
+      properties:
+        category_id:
+          type: string
+          format: uuid
+        amount_minor:
+          type: integer
+          format: int64
+    Dashboard:
+      type: object
+      required: [currency, total_balance_minor, month, budget, expense_by_category, recent]
+      properties:
+        currency:
+          type: string
+          description: The user's currency (INR before onboarding). All totals are in it.
+        total_balance_minor:
+          type: integer
+          format: int64
+          description: Sum of balances of the accounts in `currency`.
+        month:
+          $ref: '#/components/schemas/MonthTotals'
+        budget:
+          description: Overall budget progress for the month; null when no overall budget is set.
+          anyOf:
+            - $ref: '#/components/schemas/BudgetProgress'
+            - type: 'null'
+        expense_by_category:
+          type: array
+          description: Expense per category for the month, largest first.
+          items:
+            $ref: '#/components/schemas/CategoryAmount'
+        recent:
+          type: array
+          description: The 5 most recent transactions (any month).
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Transaction'
+    DailyTotals:
+      type: object
+      required: [date, income_minor, expense_minor]
+      properties:
+        date:
+          type: string
+          format: date
+        income_minor:
+          type: integer
+          format: int64
+        expense_minor:
+          type: integer
+          format: int64
+    DailyReport:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DailyTotals'
+
+    # ------------------------------------------------------------ ai
+    ReceiptUpload:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: The receipt image (JPEG, PNG, WebP or HEIC, ≤ 5 MB).
+    Extraction:
+      type: object
+      description: A transaction draft. Unreadable fields are null. Nothing is persisted.
+      required: [type, amount_minor, currency, category_id, category_key, description, occurred_on, transcript]
+      properties:
+        type:
+          description: INCOME or EXPENSE; null when unclear.
+          anyOf:
+            - $ref: '#/components/schemas/EntryType'
+            - type: 'null'
+        amount_minor:
+          type: [integer, 'null']
+          format: int64
+        currency:
+          type: string
+          description: Currency of `amount_minor` (the user's currency when the receipt does not say).
+        category_id:
+          type: [string, 'null']
+          format: uuid
+        category_key:
+          type: [string, 'null']
+        description:
+          type: [string, 'null']
+        occurred_on:
+          type: [string, 'null']
+          format: date
+        transcript:
+          type: [string, 'null']
+          description: Voice extractions only (post-MVP); always null here.

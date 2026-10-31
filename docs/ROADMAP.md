@@ -24,29 +24,35 @@ Critical-path dates:
 
 ## Phase 2: Go API incl. auth (Nov → Dec 2026)
 
+> **Done 2026-11-01** (branch `feat/go-api`, commits `8707c60`…`ad04a18`): all 33 operations in `api/openapi.yaml` implemented,
+> `go test ./...` green against real Postgres, live curl smoke test of every endpoint. Still open below: verify-email/password reset,
+> transfers, the worker jobs, the TS client (web session). Not built yet either: the per-user AI rate limit (30/h, 100/d)
+> and Idempotency-Key (Phase 6). Real providers and deployment stay OPEN.
+
 Foundation
 
-- [ ] `apps/api` Go module, `cmd/api` + `cmd/worker`, config from env, slog, graceful shutdown, `/healthz` `/readyz`
-- [ ] docker-compose Postgres up. goose baseline migration (`docs/SCHEMA.md` §3.1 incl. users/sessions/refresh_tokens), category seed
-- [ ] sqlc setup, `internal/money` with table tests, `internal/apierr` (problem+json)
-- [ ] `api/openapi.yaml` filled in for auth + me. oapi-codegen wired. TS client generator chosen [OPEN D-OPEN-10]
-- [ ] Integration-test harness against real Postgres (users per test, "other user gets 404" helper)
+- [x] `apps/api` Go module, `cmd/api` + `cmd/worker` (worker is a stub, D-22), config from env, slog, graceful shutdown, `/healthz` `/readyz`
+- [x] docker-compose Postgres up. goose baseline migration (`docs/SCHEMA.md` §3.1 incl. users/sessions/refresh_tokens), category seed
+- [x] sqlc setup, `internal/money` with table tests, `internal/apierr` (problem+json)
+- [x] `api/openapi.yaml` filled in for auth + me (and every MVP domain endpoint). oapi-codegen wired. TS client generator decided:
+  openapi-typescript + openapi-fetch (owner, 2026-11-01, D-OPEN-10); generation itself is set up in the web session
+- [x] Integration-test harness against real Postgres (users per test, "other user gets 404" helper)
 
 Auth [MVP]
 
-- [ ] Argon2id hasher, token issuer/verifier, auth middleware (decide AUTH.md Q-1..Q-5, Q-8, Q-10, Q-12 first)
-- [ ] `POST /v1/auth/register|login|refresh|logout|logout-all|password`, rate limits
-- [ ] AUTH.md §9 checklist tests all green
+- [x] Argon2id hasher, token issuer/verifier, auth middleware (AUTH.md Q-1..Q-5, Q-8, Q-10, Q-12 resolved in DECISIONS.md)
+- [x] `POST /v1/auth/register|login|refresh|logout|logout-all|password`, rate limits
+- [x] AUTH.md §9 checklist tests all green
 - [ ] [OPEN D-OPEN-2] verify-email + password-reset flows (email interface + `log` driver now; real adapter after the decision)
 
 Domain [MVP]
 
-- [ ] `GET/PATCH/DELETE /v1/me`, `POST /v1/me/onboarding`
-- [ ] Categories, accounts (CRUD, make-default, two-step delete)
-- [ ] Transactions (keyset list, filters, `q`, get, create, patch, delete) with the balance invariant tested, including concurrency
-- [ ] Budgets (overall), dashboard, daily report, CSV export
-- [ ] [STRETCH] Transfers
-- [ ] `POST /v1/ai/receipt-extractions` behind `ai.ReceiptExtractor` (fake driver) [OPEN D-OPEN-1 for the real one]
+- [x] `GET/PATCH/DELETE /v1/me`, `POST /v1/me/onboarding`
+- [x] Categories, accounts (CRUD, make-default, two-step delete)
+- [x] Transactions (keyset list, filters, `q`, get, create, patch, delete) with the balance invariant tested, including concurrency
+- [x] Budgets (overall + per-category API), dashboard, daily report, CSV export
+- [ ] [STRETCH] Transfers (not built: D-21. Deleting/listing existing legs works; creating them does not)
+- [x] `POST /v1/ai/receipt-extractions` behind `ai.ReceiptExtractor` (fake driver) [OPEN D-OPEN-1 for the real one; per-user rate limit not built yet]
 - [ ] Worker: job queue chosen [OPEN D-OPEN-9]; budget alerts, weekly tips (fake AI + log email), balance reconcile
 
 ## Phase 3: Next.js web (Jan 2027)

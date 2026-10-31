@@ -24,6 +24,47 @@ so the code can be built before a vendor is chosen.
 | D-14 | Build tools allowed: pnpm, Docker, GitHub Actions (when a remote exists), EAS Build | Not product dependencies |
 | D-15 | 6-month MVP. MVP = accounts, transactions, budget, dashboard, CSV export, receipt scan, budget alerts, weekly tips. POST = voice, assistant, recurring, goals, multi-currency, shared accounts, bank import | Scope control for a solo developer |
 
+## Auth questions (docs/AUTH.md §11), resolved 2026-11-01 for the Go-API session
+
+"Owner" = chosen by the owner. **"Decided by default, review needed"** = the default recommended in AUTH.md was applied because the owner
+asked for that; the owner should review these.
+
+| Q | Resolution | How decided |
+| --- | --- | --- |
+| Q-1 | Argon2id `m=19456 KiB, t=2, p=1`, 16-byte salt, 32-byte key, PHC string, rehash on login when params change. Tune on the production host later | **Decided by default, review needed** |
+| Q-1 (NFC) | Passwords are NFC-normalised before hashing (`golang.org/x/text/unicode/norm`, approved) | Owner, 2026-11-01 |
+| Q-2 | Access token lifetime 15 min (`AUTH_ACCESS_TOKEN_TTL`) | **Decided by default, review needed** |
+| Q-3 | HS256 with a shared secret (`AUTH_ACCESS_TOKEN_SIGNING_KEY`, ≥ 32 bytes), `kid` header for rotation | Owner, 2026-11-01 |
+| Q-4 | Refresh token idle lifetime 30 days, renewed on every rotation (sliding). Session absolute lifetime 90 days (fixed, `AUTH_SESSION_MAX_AGE`) | **Decided by default, review needed** |
+| Q-5 | Every authenticated request checks that the token's session is not revoked or expired (one indexed lookup) | Owner, 2026-11-01 |
+| Q-6 | Register-time enumeration accepted in MVP (`409 email_taken`) | **Decided by default, review needed** |
+| Q-7 | Email verification does not gate login. Verification and password reset are not built until D-OPEN-2 is decided | **Decided by default, review needed** (provider still OPEN) |
+| Q-8 | Clients serialise refreshes. No server grace window: re-presenting a used token always counts as reuse and revokes the session | **Decided by default, review needed** |
+| Q-9 | MFA / passkeys / social login: post-MVP, nothing built | Deferred (no decision needed now) |
+| Q-10 | Rate-limit state in memory (single API instance). Move to Postgres before running more than one instance | **Decided by default, review needed** |
+| Q-11 | Web token transport | Still **OPEN** (D-OPEN-6), decided in the web session |
+| Q-12 | `github.com/golang-jwt/jwt/v5` | Owner (dependency approved), 2026-11-01 |
+
+## Implementation choices made in the Go-API session (review needed)
+
+| ID | Choice | Reason |
+| --- | --- | --- |
+| D-16 | Approved Go dependencies: chi, pgx/v5, goose v3, oapi-codegen v2 (+ `oapi-codegen/runtime`, `getkin/kin-openapi` which it needs), golang-jwt/jwt/v5, x/crypto, google/uuid, x/time/rate, x/text | Owner approval, 2026-11-01. No other modules |
+| D-17 | The contract stays OpenAPI **3.1** (oapi-codegen v2.8.1 and kin-openapi v0.142 were tested with 3.1 type arrays). Request validation = kin-openapi `openapi3filter` middleware against the embedded spec | No extra dependency; unknown fields rejected by `additionalProperties: false` |
+| D-18 | sqlc runs from the `sqlc/sqlc:1.30.0` Docker image (no local install); goose runs as a library inside `api migrate` | No system software to install on Windows |
+| D-19 | Register creates the default "Cash" account with currency **INR** as a placeholder. Onboarding sets the user's currency and re-sets the default account's currency and opening balance (refused with `409 currency_locked` if that account already has transactions) | `accounts.currency` is NOT NULL but the user picks a currency only at onboarding. **Review needed** |
+| D-20 | PATCH bodies are non-nullable: omitted = unchanged, `""` clears a transaction's `description` / `voice_transcript` only (not `name`, see D-30) | Avoids an extra nullable-type dependency in generated code |
+| D-21 | Not built this session (kept out of the spec): transfers, password reset, email verification, unsubscribe, sessions list, voice, assistant, avatar, `/v1/me/export` | Blocked on OPEN items or post-MVP |
+| D-22 | Background jobs: `cmd/worker` is a stub; no job library until D-OPEN-9 | Owner instruction |
+| D-23 | Logout revokes the session owning the presented refresh token **only if it is the caller's**; an unknown, malformed, already-revoked or foreign token is a silent `204` | Logout is not an oracle for other people's tokens; the body names the session to end |
+| D-24 | Wrong passwords on `POST /v1/auth/password` and `DELETE /v1/me` count against the login buckets (per email + per IP). Side effect: a stolen access token can throttle login for that email (bucket refills fully within 15 min) | A stolen access token cannot be used to brute-force the password |
+| D-25 | Refresh checks session revocation / absolute expiry / token expiry **before** reuse: an expired (or revoked) used token gives `401 refresh_invalid` without revoking anything | Reuse detection is only meaningful for a token that could still work |
+| D-26 | A budget stores the user's currency at `PUT` time. A budget set before onboarding stays INR until it is PUT again | Simple; budgets are re-set rarely. **Review**: re-PUT or migrate on onboarding? |
+| D-27 | Budget `DELETE` is idempotent: `204` even when none was set | Clients need no existence check |
+| D-28 | Onboarding is refused (`409 currency_locked`) only when it would **change** the default account's currency while it has transactions; the same currency with transactions is allowed | Nothing is lost when the currency stays |
+| D-29 | The per-request session check compares `expires_at` with DB `now()`; refresh expiry uses the app clock (`Deps.Now`) | Session check is one SQL query; refresh logic is clock-injectable for tests. Fine on one host, watch for clock skew |
+| D-30 | `PATCH /v1/me` cannot clear `name` (`minLength: 1`, whitespace-only → `422`) | Follows D-20 (no nulls); an empty display name has no use |
+
 ## OPEN
 
 ### D-OPEN-1 · LLM provider (receipt scan [MVP], voice entry and assistant [POST], weekly tips [MVP])
@@ -99,8 +140,10 @@ Postgres-backed library. Trade-offs: a dependency vs code to maintain. River nee
 
 ### D-OPEN-10 · Smaller tooling choices (ask before adding)
 
-- Go: `golang.org/x/crypto` (argon2id), a JWT library vs stdlib, `google/uuid`, `golang.org/x/time/rate`, golangci-lint.
-- TS client generator for `packages/api-client`: openapi-typescript + openapi-fetch, orval, or hey-api.
+- ~~Go: `golang.org/x/crypto` (argon2id), a JWT library vs stdlib, `google/uuid`, `golang.org/x/time/rate`.~~ **Decided** (owner, 2026-11-01;
+  see D-16): `golang.org/x/crypto`, `github.com/golang-jwt/jwt/v5`, `google/uuid`, `golang.org/x/time/rate` (+ `golang.org/x/text`). golangci-lint is still open.
+- ~~TS client generator for `packages/api-client`: openapi-typescript + openapi-fetch, orval, or hey-api.~~ **Decided** (owner, 2026-11-01):
+  **openapi-typescript + openapi-fetch**, set up in the web session.
 - Error tracking: Sentry (SaaS), self-hosted GlitchTip, or logs only.
 - Web UI kit and charts library.
 
