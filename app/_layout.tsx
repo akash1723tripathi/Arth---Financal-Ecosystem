@@ -1,12 +1,25 @@
-import { useAuth } from "@clerk/expo";
-import { Redirect, Stack } from "expo-router";
+import { queryClient } from "@/lib/query/client";
+import { ClerkProvider } from "@clerk/expo";
+import { tokenCache } from "@clerk/expo/token-cache";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { Slot } from "expo-router";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import "../global.css";
 
-export default function AuthLayout() {
-  const { isSignedIn, isLoaded } = useAuth();
+const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!;
 
-  if (!isLoaded) return null;
+if (!publishableKey) {
+  throw new Error("Add your Clerk Publishable Key to the .env file");
+}
 
-  if (isSignedIn) return <Redirect href="/" />;
-
-  return <Stack screenOptions={{ headerShown: false }} />;
+export default function RootLayout() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+          <Slot />
+        </ClerkProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
+  );
 }
