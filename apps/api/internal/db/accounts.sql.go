@@ -285,6 +285,36 @@ func (q *Queries) LockAccounts(ctx context.Context, arg LockAccountsParams) ([]A
 	return items, nil
 }
 
+const lockUserAccounts = `-- name: LockUserAccounts :many
+SELECT id FROM accounts
+WHERE user_id = $1
+ORDER BY id
+FOR UPDATE
+`
+
+// Locks every account of the user in ascending id order (same order as LockAccounts, so it cannot deadlock with
+// transaction writes). make-default uses it to serialise concurrent default changes: after it returns, the
+// following statements see every committed change (READ COMMITTED takes a new snapshot per statement).
+func (q *Queries) LockUserAccounts(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, lockUserAccounts, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setDefaultAccount = `-- name: SetDefaultAccount :one
 UPDATE accounts SET is_default = true, updated_at = now()
 WHERE id = $1 AND user_id = $2

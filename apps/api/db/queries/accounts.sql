@@ -80,3 +80,12 @@ FROM accounts
 WHERE user_id = @user_id AND archived_at IS NULL
 GROUP BY currency
 ORDER BY currency;
+
+-- name: LockUserAccounts :many
+-- Locks every account of the user in ascending id order (same order as LockAccounts, so it cannot deadlock with
+-- transaction writes). make-default uses it to serialise concurrent default changes: after it returns, the
+-- following statements see every committed change (READ COMMITTED takes a new snapshot per statement).
+SELECT id FROM accounts
+WHERE user_id = @user_id
+ORDER BY id
+FOR UPDATE;
