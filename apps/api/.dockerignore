@@ -1,0 +1,19 @@
+# Never send secrets to the build context.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local build output and editor noise
+bin/
+dist/
+tmp/
+*.exe
+*.test
+*.out
+coverage*
+.idea/
+.vscode/
+Dockerfile
+.dockerignore
