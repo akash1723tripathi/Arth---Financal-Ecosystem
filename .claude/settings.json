@@ -1,5 +1,68 @@
 {
   "enabledPlugins": {
     "expo@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch)",
+      "Bash(git branch --show-current)",
+      "Bash(git branch -a *)",
+      "Bash(git branch -v *)",
+      "Bash(git ls-files *)",
+      "Bash(git rev-parse *)",
+      "Bash(npx tsc --noEmit *)",
+      "Bash(npx eslint *)",
+      "Bash(pnpm mobile:typecheck *)",
+      "Bash(pnpm mobile:lint *)",
+      "Bash(pnpm mobile:bundle:android *)",
+      "Bash(pnpm verify:mobile *)",
+      "Bash(pnpm --filter @arth/mobile typecheck *)",
+      "Bash(pnpm --filter @arth/mobile lint *)",
+      "Bash(pnpm --filter @arth/mobile bundle:android *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(gofmt -l *)"
+    ],
+    "ask": [
+      "Bash(rm -rf *)",
+      "Bash(rm -r *)",
+      "Bash(git reset --hard *)",
+      "Bash(git push *)",
+      "Bash(git clean *)",
+      "Bash(git branch -D *)",
+      "Bash(git branch -d *)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
+      "Bash(git rebase *)",
+      "Bash(git stash drop *)",
+      "Bash(git tag -d *)",
+      "Bash(docker compose down -v *)",
+      "Bash(docker volume rm *)",
+      "Bash(docker system prune *)",
+      "PowerShell(Remove-Item *)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.production)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.p8)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Read(**/*.jks)",
+      "Read(**/*.keystore)",
+      "Read(**/google-service-account*.json)",
+      "Read(**/play-service-account*.json)"
+    ]
   }
 }

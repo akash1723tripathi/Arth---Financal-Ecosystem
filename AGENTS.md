@@ -1,3 +1,1 @@
-# Expo HAS CHANGED
-
-Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/ before writing any code.
+Agent instructions live in `CLAUDE.md` (repo root) and the nested `apps/*/CLAUDE.md` files. Read those; there are no separate rules here.

@@ -1,98 +1,95 @@
-# Arth — project memory
+# Arth: project memory
 
-Personal-finance ecosystem: multiple accounts, income/expense transactions, budgets,
-dashboard charts, CSV export, AI receipt scan, budget-alert + weekly-tips emails.
-Working name **Arth** (may change). Solo developer. 6-month MVP, Android first, iOS later.
-
-Started from **Welth** (Expo + Clerk + Supabase + Gemini, by piyush-eon), a third-party
-boilerplate that has **no licence file**. See "Provenance" in @docs/MIGRATION.md.
+Arth is a personal finance tracker. Users get multiple accounts, income/expense transactions, a monthly budget, dashboard charts,
+CSV export, AI receipt scan, and budget-alert + weekly-tips emails. Voice entry and an AI assistant come later.
+Android first (Expo), then a Next.js web app, both backed by a Go API with its **own authentication** on PostgreSQL.
+Solo developer, 6-month MVP. The project started from the third-party Welth boilerplate (no licence file; see `docs/MIGRATION.md` §7).
 
 ## Status
 
-- Phase 0: documentation only. No Go or web code exists yet; the Expo app still lives at the repo root.
-- The repo is **not a git repo yet**, and three route files in the copied app are broken
-  (see `docs/MIGRATION.md` → Step 0). Fix both before any other work.
+- **Done:** mobile app restructured into the monorepo and renamed to Arth (placeholder id `fyi.akashbuilds.arth`, scheme `arth`).
+  It compiles: tsc, eslint and the Android bundle pass.
+- **Temporary:** the mobile app **still uses Clerk + Supabase + client-side Gemini**. These are marked "to be replaced" and must not be removed
+  until the Go API exists.
+- **Next session:** the Go backend in `apps/api`, auth included (`docs/AUTH.md`). Full detail: `docs/PROGRESS.md`.
 
-## Monorepo map (target; pnpm workspaces)
+## Session order (decided)
+
+1. Mobile restructure ✅
+2. Go API incl. auth
+3. Next.js web
+4. Repoint mobile to the Go API and drop Clerk/Supabase
+5. Android emulator testing
+6. Hardening
+7. Play closed test
+8. Launch
+
+## Monorepo map
 
 ```text
-apps/api/            Go module: cmd/api (HTTP), cmd/worker (River jobs)     → apps/api/CLAUDE.md
-apps/web/            Next.js (App Router), Clerk, TanStack Query            → docs/WEB_APP.md
-apps/mobile/         this Expo app (moves here from repo root)               → apps/mobile/CLAUDE.md
-packages/api-client/ TS client generated from api/openapi.yaml
-api/openapi.yaml     single source of truth for the HTTP contract
-docker-compose.yml   local Postgres
-.github/workflows/   path-filtered CI per app
-docs/                architecture, migration, schema, API, roadmap, web, deployment
+apps/mobile/          Expo SDK 54 app (Android first)          → apps/mobile/CLAUDE.md
+apps/api/             Go API + worker (placeholder)            → apps/api/CLAUDE.md
+apps/web/             Next.js web app (placeholder)            → apps/web/CLAUDE.md
+packages/api-client/  TS client generated from the contract (placeholder)
+api/openapi.yaml      HTTP contract: single source of truth (OpenAPI 3.1 skeleton)
+docker-compose.yml    local Postgres 16 (dev only)
+legacy/               Welth Supabase functions + SQL: reference only, deleted later
+docs/                 all design docs (index below)
+.claude/              settings (permissions), commands (/status, /verify-mobile, /update-docs), path rules
 ```
 
-Until the move, the Expo app sits at the root (`app/`, `components/`, `hooks/`, `lib/`, …), and
-`apps/mobile/CLAUDE.md` applies to those folders.
+pnpm workspace (`pnpm-workspace.yaml`, pnpm 10 via corepack, `nodeLinker: hoisted`, which Metro needs). Run JS commands from the repo root.
 
-## Decided (do not change without asking)
+## Decisions (details and reasons: `docs/DECISIONS.md`)
 
-- **Backend:** Go, chi, pgx + sqlc, goose migrations, slog, oapi-codegen (OpenAPI-first),
-  River for background jobs (Postgres-backed, no Redis), Resend for email, and Gemini through the official Go SDK, server-side only.
-- **Auth:** Clerk. Go middleware verifies Clerk JWTs via JWKS. Every query is scoped by `user_id`, which replaces Supabase RLS.
-- **DB:** plain managed PostgreSQL (Neon). Money is `BIGINT` minor units plus an ISO-4217 currency code.
-- **Deploy:** API and worker run in Docker on Railway or Render, web on Vercel, and mobile ships through EAS Build/Submit/Update.
-- **MVP:** accounts, transactions, budget, dashboard aggregates, CSV export, receipt scan,
-  budget alerts and weekly tips. **Post-MVP:** voice entry, AI assistant, recurring transactions, goals,
-  multi-currency, shared accounts, bank import.
+- **No third-party SaaS in the product.** No Clerk, no Supabase. Auth is built in Go, and Go talks to PostgreSQL directly.
+- Anything that genuinely needs an outside provider sits **behind a Go interface** and is an **OPEN** item until decided:
+  LLM (receipt/voice/assistant), email delivery, object storage, push notifications, production Postgres/API/web hosting.
+  The existing Gemini/Resend usage is legacy and will be re-decided.
+- Go stack: chi, pgx, sqlc, goose, oapi-codegen (OpenAPI-first), slog. Background jobs use a Postgres-backed queue (River or equivalent). Next.js web. Expo mobile.
+- Money is `BIGINT` minor units + ISO-4217 currency code, everywhere. Every user-data query is scoped by the authenticated `user_id`.
+- Build tools are fine: pnpm, Docker, GitHub Actions (once a remote exists), EAS Build. There is no GitHub repo; git is local only.
 
 ## Hard rules
 
-1. Never commit secrets. Each app keeps a `.env.example` with variable **names only**.
-2. All DB access goes through sqlc queries. Every query on user data is scoped by the authenticated `user_id`
-   from middleware, never by an id the client sends.
-3. Never use floats for money (Go `float64`, JS `parseFloat`/`Number` math, SQL `numeric`/`real`).
-   Use integer minor units and parse decimal strings.
-4. API changes start in `api/openapi.yaml`. Then regenerate the Go stubs and the TS client, then implement.
-5. AI keys (and every other secret) never ship in client code. No secrets in `EXPO_PUBLIC_*` or `NEXT_PUBLIC_*`.
-6. Ask before adding a dependency or changing a decided item.
-7. After each completed phase, tick the checkboxes in `docs/ROADMAP.md` and update the Status section here.
-8. Welth is third-party code. Flag any file that looks copied verbatim so its licence can be
-   checked before launch (inventory in `docs/MIGRATION.md` → Provenance).
+1. **No secrets in git.** Only `.env.example` files with variable names. Never ask the user to paste secrets into chat.
+2. **Never use floats for money**, in any language or column type. Use integer minor units and parse decimal strings.
+3. **No AI or provider keys in client code.** No secrets in `EXPO_PUBLIC_*` / `NEXT_PUBLIC_*`.
+4. **No third-party services without asking.** Every provider goes behind an interface and is recorded in `docs/DECISIONS.md`.
+5. **Ask before adding a dependency** or changing a decided item.
+6. Every DB query on user data goes through sqlc and is filtered by the authenticated `user_id`.
+7. API changes start in `api/openapi.yaml`, then regenerate the code.
+8. Never claim something works without running it, and show the real output. Things you cannot run go under "must test manually".
+9. After each phase, update `docs/ROADMAP.md` (checkboxes) and `docs/PROGRESS.md` (`/update-docs` helps).
+10. Welth is third-party code. Flag anything copied verbatim (`docs/MIGRATION.md` §7).
 
-## Conventions
+## Git
 
-- **API:** REST under `/v1`, JSON, `snake_case` fields, RFC 9457 `problem+json` errors, and cursor pagination
-  (see `docs/API.md`). Another user's resource returns 404, never 403.
-- **Money in JSON:** `amount_minor` (integer) plus `currency`. Format for display only, at the edge.
-- **Dates:** a transaction date is a calendar `date` (`occurred_on`, `YYYY-MM-DD`) in the user's timezone.
-  Timestamps are RFC 3339 UTC.
-- **Migrations:** expand/contract only. Old mobile builds stay in the field for months.
-- **TS (web/mobile):** server state lives in TanStack Query through `@arth/api-client`. Zustand holds UI/session state only.
-- **Go:** see `apps/api/CLAUDE.md` (layout, errors, tests, sqlc/goose, money).
-- Small vertical slices: contract → migration → queries → handler → tests → client → UI.
+Local only. Branch per piece of work (current: `feat/mobile-restructure`). Conventional Commits, one commit per task. `main` holds the Welth baseline.
 
-## Commands
+## Commands (from the repo root)
 
-Fill these in as they come into existence; until then they are the planned names.
-
-| Task | Command (planned) |
+| Task | Command |
 | --- | --- |
-| Install JS deps | `pnpm install` |
-| Local DB | `docker compose up -d db` |
-| Run API / worker | `cd apps/api && go run ./cmd/api` / `go run ./cmd/worker` |
-| Migrate | `cd apps/api && go run ./cmd/api migrate up` (goose, embedded migrations) |
-| Generate DB code | `cd apps/api && sqlc generate` |
-| Generate API stubs + TS client | `pnpm gen:api` (runs oapi-codegen + TS generator) |
-| Go tests | `cd apps/api && go test ./...` |
-| Web dev | `pnpm --filter @arth/web dev` |
-| Mobile dev | `pnpm --filter @arth/mobile start` |
-| Current app (pre-move) | `npx expo start -c` |
+| Install | `pnpm install` |
+| Verify mobile (tsc + lint + Android bundle) | `pnpm verify:mobile` (or `/verify-mobile`) |
+| Run mobile | `pnpm mobile` (see `docs/RUN_LOCALLY.md`) |
+| Local Postgres | `pnpm db:up` / `pnpm db:down` (needs `.env` from `.env.example`) |
+| Go API (later) | see `apps/api/CLAUDE.md` |
 
-## Docs (detail lives here, not in this file)
+## Docs index
 
-@docs/ARCHITECTURE.md
-@docs/MIGRATION.md
-@docs/SCHEMA.md
-@docs/API.md
-@docs/ROADMAP.md
-@docs/WEB_APP.md
-@docs/DEPLOYMENT.md
-
-## Mobile guidance (temporary, until the app moves to apps/mobile/)
-
-@AGENTS.md
+| File | What |
+| --- | --- |
+| `docs/PROGRESS.md` | Done / next / known problems; start here each session |
+| `docs/ROADMAP.md` | Phases with checkboxes, MVP vs post-MVP |
+| `docs/DECISIONS.md` | Decided items and OPEN provider decisions |
+| `docs/ARCHITECTURE.md` | Current (Welth) vs target architecture |
+| `docs/MIGRATION.md` | Every Supabase/Clerk/Gemini call (file:line) → Go endpoint; provenance checklist |
+| `docs/AUTH.md` | Own-auth design (proposal) |
+| `docs/SCHEMA.md` | Target Postgres schema |
+| `docs/API.md` | REST endpoints and conventions |
+| `docs/MOBILE_SCREENS.md` | Screen-by-screen spec (also the web app spec) |
+| `docs/WEB_APP.md` | Next.js structure |
+| `docs/DEPLOYMENT.md` | Environments, env var names, CI/CD (hosting OPEN) |
+| `docs/RUN_LOCALLY.md` | Windows steps to run the mobile app on an emulator |
