@@ -3,7 +3,7 @@
 The source of truth will be goose migrations in `apps/api/db/migrations/`. The SQL below shows the **target**
 design. Adjust it in the migration files, then update this doc.
 
-## 1. Current schema (Welth, `scripts/schema.sql`)
+## 1. Current schema (Welth, `legacy/scripts/schema.sql`, hosted on Supabase)
 
 | Table | Columns | Notes / problems |
 | --- | --- | --- |
@@ -12,7 +12,9 @@ design. Adjust it in the migration files, then update this doc.
 | `transactions` | `id`, `user_id`, `account_id → accounts`, `type` (`INCOME\|EXPENSE`), `amount numeric`, `category text`, `description`, `date timestamptz`, `status` (always `COMPLETED`), `input_method` (`MANUAL\|RECEIPT_SCAN\|VOICE`), `voice_transcript`, `is_flagged`, `flag_reason`, `created_at`, `updated_at` | No CHECKs. Category is free text. No indexes beyond the PK. Nothing ensures `account_id` belongs to `user_id`. `status`/`is_flagged`/`flag_reason` are unused. |
 | `budgets` | `id`, `user_id UNIQUE`, `amount numeric`, `last_alert_sent`, `last_alert_threshold numeric`, timestamps | One overall budget per user. Alert state is mixed into the budget row. |
 
-RLS: each table has policies of the form `user_id = auth.jwt()->>'sub'`. These go away. Authorization moves into the Go API (§4).
+RLS: each table has policies of the form `user_id = auth.jwt()->>'sub'` (Clerk's JWT). Clerk, Supabase and RLS all go away.
+Arth owns users and credentials, and authorization lives in the Go API (§4). No production data exists, so there is no data migration;
+the optional dev-data port is in §7.
 
 ## 2. Design rules
 
@@ -25,7 +27,9 @@ RLS: each table has policies of the form `user_id = auth.jwt()->>'sub'`. These g
   **composite FK `(x_id, user_id) → parent(id, user_id)`**, so the DB rejects cross-user references even if a query is wrong.
 - **Dates:** `occurred_on DATE` is the user's calendar day. `timestamptz` is used only for audit fields.
 - **Timestamps:** `created_at/updated_at timestamptz NOT NULL DEFAULT now()`. `updated_at` is set explicitly in sqlc `UPDATE`s (no triggers).
-- **Requirements:** PostgreSQL ≥ 15 (`UNIQUE NULLS NOT DISTINCT`). Neon and docker-compose should both run the same major version (17 suggested).
+- **Requirements:** PostgreSQL ≥ 15 (`UNIQUE NULLS NOT DISTINCT`, `ON DELETE SET NULL (col)`). Local dev runs **Postgres 16** (`docker-compose.yml`).
+  Production must run the same major version (host is OPEN).
+- **Secrets at rest:** passwords are stored only as Argon2id hashes. Refresh/verification/reset tokens are stored only as SHA-256 hashes.
 
 ## 3. Target schema
 
@@ -35,11 +39,13 @@ RLS: each table has policies of the form `user_id = auth.jwt()->>'sub'`. These g
 -- users ---------------------------------------------------------------
 CREATE TABLE users (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  clerk_user_id        text NOT NULL UNIQUE,
-  email                text NOT NULL,
-  name                 text,
-  image_url            text,
-  default_currency     char(3),                        -- NULL until onboarding
+  email                text NOT NULL CHECK (length(email) BETWEEN 3 AND 254),  -- stored as entered, trimmed
+  email_verified_at    timestamptz,                    -- NULL until verified (flow is OPEN: needs email provider)
+  password_hash        text NOT NULL,                  -- Argon2id PHC string: $argon2id$v=19$m=…,t=…,p=…$salt$hash
+  password_changed_at  timestamptz NOT NULL DEFAULT now(),
+  name                 text CHECK (length(name) <= 100),
+  avatar_key           text,                           -- object-storage key (OPEN; NULL = no avatar)
+  currency             char(3),                        -- default currency; NULL until onboarding
   timezone             text NOT NULL DEFAULT 'UTC',    -- IANA, validated in Go
   onboarded_at         timestamptz,
   email_budget_alerts  boolean NOT NULL DEFAULT true,
@@ -47,6 +53,57 @@ CREATE TABLE users (
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now()
 );
+-- case-insensitive uniqueness without the citext extension; look-ups use lower(email) too
+CREATE UNIQUE INDEX users_email_lower_uq ON users (lower(email));
+
+-- sessions: one per signed-in device/browser ---------------------------
+CREATE TABLE sessions (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client         text NOT NULL CHECK (client IN ('MOBILE','WEB')),
+  user_agent     text CHECK (length(user_agent) <= 512),
+  ip             inet,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  last_used_at   timestamptz NOT NULL DEFAULT now(),
+  expires_at     timestamptz NOT NULL,               -- absolute lifetime (e.g. created_at + 90 days; OPEN in AUTH.md)
+  revoked_at     timestamptz,
+  revoke_reason  text CHECK (revoke_reason IN ('LOGOUT','LOGOUT_ALL','REFRESH_REUSE','PASSWORD_CHANGED','ACCOUNT_DELETED','ADMIN'))
+);
+CREATE INDEX sessions_user_active_idx ON sessions (user_id) WHERE revoked_at IS NULL;
+
+-- refresh_tokens: rotating, single-use, stored hashed -----------------
+CREATE TABLE refresh_tokens (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id    uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  token_hash    bytea NOT NULL UNIQUE,              -- SHA-256 of the opaque 256-bit token
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  expires_at    timestamptz NOT NULL,               -- idle lifetime (e.g. 30 days)
+  used_at       timestamptz,                        -- set on rotation; presenting it again = reuse → revoke session
+  replaced_by   uuid REFERENCES refresh_tokens(id) ON DELETE SET NULL
+);
+CREATE INDEX refresh_tokens_session_idx ON refresh_tokens (session_id);
+```
+
+Planned with the email-provider decision (OPEN), so not in the first migration:
+
+```sql
+-- one-time tokens for email verification and password reset ----------
+CREATE TABLE auth_tokens (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose      text NOT NULL CHECK (purpose IN ('VERIFY_EMAIL','RESET_PASSWORD')),
+  token_hash   bytea NOT NULL UNIQUE,               -- SHA-256; raw token only ever in the email link
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  expires_at   timestamptz NOT NULL,                -- short: e.g. 30 min reset, 24 h verify
+  used_at      timestamptz
+);
+CREATE INDEX auth_tokens_user_purpose_idx ON auth_tokens (user_id, purpose) WHERE used_at IS NULL;
+```
+
+Rate-limit state for login/register is in memory for a single API instance, or in a Postgres table if several run.
+That choice is an open question in `docs/AUTH.md` §5.
+
+```sql
 
 -- categories ------------------------------------------------------------
 -- System categories: user_id NULL + stable key (seeded from the 21 Welth keys).
@@ -153,9 +210,9 @@ CREATE INDEX notifications_user_created_idx ON notifications (user_id, created_a
 
 Also in the baseline:
 
-- **River tables:** generate them with `river migrate-get --up --all` and commit the output as a goose migration, so goose owns all DDL.
+- **Job-queue tables:** if River is confirmed, generate its tables with `river migrate-get --up --all` and commit them as a goose migration, so goose owns all DDL.
 - **Seed:** the 21 system categories (same keys as `constants/categories.ts`) live in a goose migration (data, idempotent `ON CONFLICT (key) WHERE user_id IS NULL DO NOTHING`).
-- **Roles:** `arth_migrator` (DDL) and `arth_app` (DML on app tables + River tables only). The API and worker connect as `arth_app`.
+- **Roles:** `arth_migrator` (DDL) and `arth_app` (DML on app tables + job-queue tables only). The API and worker connect as `arth_app`.
 
 Changes from Welth: `status`, `is_flagged` and `flag_reason` are dropped (never written). Reintroduce them with a real feature.
 The starting balance becomes `opening_balance_minor`. Budget alert state moves to `notifications`.
@@ -264,7 +321,7 @@ DELETE FROM transactions WHERE id = @id AND user_id = @user_id RETURNING account
 
 | Operation | Steps inside the tx |
 | --- | --- |
-| Create | `LockAccount` (404 if missing, 409 if archived or currency ≠) → validate category → `InsertTransaction` → `ApplyBalanceDelta(+delta)` (must affect 1 row) → `InsertTx` budget-check job → commit |
+| Create | `LockAccount` (404 if missing, 409 if archived or currency ≠) → validate category → `InsertTransaction` → `ApplyBalanceDelta(+delta)` (must affect 1 row) → enqueue the budget-check job in the same tx → commit |
 | Delete | `DeleteTransaction … RETURNING` → `ApplyBalanceDelta(-delta)`. If `transfer_id`, delete the other leg too and reverse its delta |
 | Update | `SELECT … FOR UPDATE` on the old row → lock the old and new accounts **in ascending id order** (prevents deadlocks) → reverse the old delta → update the row → apply the new delta |
 | Transfer | Lock both accounts in id order → insert `TRANSFER_OUT` + `TRANSFER_IN` with the same `transfer_id` → two deltas |
@@ -281,3 +338,11 @@ Isolation is READ COMMITTED (default). That is safe because of the row locks and
 - **Keyset page:** `… WHERE user_id=$1 [filters] AND (occurred_on, created_at, id) < ($c_date, $c_created, $c_id) ORDER BY occurred_on DESC, created_at DESC, id DESC LIMIT $n+1`.
   The cursor is base64 of the last tuple.
 - **Search (`q`):** `description ILIKE '%' || $q || '%'` within the user's rows (small per-user sets). Add a `pg_trgm` index only if needed.
+
+## 7. Optional: port Welth dev data
+
+There are no production users, so nothing has to migrate. If the old Supabase project holds dev data worth keeping, use a one-off Go command
+(`apps/api/cmd/tools/import-welth`). Clerk users cannot be ported with passwords (Arth never sees them), so imported users must set a new
+password, which needs the reset flow (OPEN). Mapping: `numeric amount` → `round(amount * 10^exponent)::bigint` (reject non-integral values);
+`date timestamptz` → `(date AT TIME ZONE tz)::date`; category text key → `categories.id`; "Starting balance" income rows →
+`accounts.opening_balance_minor`; recompute and compare `balance_minor`.

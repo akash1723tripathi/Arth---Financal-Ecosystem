@@ -1,120 +1,86 @@
 # Deployment
 
-Variable **names only** below. Real values live in provider dashboards (Railway/Render, Vercel, EAS, GitHub Environments) and
-in local `.env` files that are never committed. Every app keeps a `.env.example` with these names.
+Variable **names only** below. Real values live in local `.env` files (gitignored) and, later, in the chosen hosts' secret stores.
+Each app has a `.env.example` with these names.
+
+> Hosting is **OPEN**. The earlier plan (Clerk, Neon, Railway/Render, Vercel) is withdrawn by the no-SaaS decision.
+> Choices: `docs/DECISIONS.md` D-OPEN-3 (Postgres), D-OPEN-4 (API/worker), D-OPEN-5 (web). Mobile builds use EAS (allowed build tool).
 
 ## 1. Environments
 
-| | Local | Staging | Production |
+| | Local (now) | Staging (later) | Production (later) |
 | --- | --- | --- | --- |
-| API + worker | `go run` on your machine | Railway/Render service `arth-api-staging`, `arth-worker-staging` | `arth-api`, `arth-worker` |
-| Database | docker-compose Postgres 17 | Neon branch `staging` | Neon branch `main` (protected, PITR) |
-| Clerk | Dev instance | Dev instance | Prod instance (custom domain) |
-| Email | `EMAIL_DRIVER=log` (no sends) | Resend with a verified staging subdomain, sends only to an allowlist | Resend prod domain |
-| Gemini | Real key (low quota) or `AI_DRIVER=fake` | Staging key | Prod key (separate project, budget alerts on) |
-| Web | `next dev` | Vercel Preview deployments | Vercel Production on the custom domain |
-| Mobile | Expo dev client (`development` profile) → local or staging API | EAS `preview` profile (internal/closed track) → staging API | EAS `production` profile → Play Store → prod API |
+| Postgres | `docker-compose.yml` → `postgres:16-alpine` on `127.0.0.1:5432` | OPEN host, separate DB | OPEN host, PITR backups |
+| API + worker | `go run ./cmd/api`, `go run ./cmd/worker` | OPEN host, Docker image | OPEN host, same image |
+| Auth | Built-in (Go). Signing key from local `.env` | Own key | Own key (rotated) |
+| AI | `AI_DRIVER=fake` | OPEN vendor or fake | OPEN vendor |
+| Email | `EMAIL_DRIVER=log` (prints to the log) | OPEN vendor, allowlisted recipients | OPEN vendor |
+| Storage | `STORAGE_DRIVER=none`/`fs` | OPEN | OPEN |
+| Web | `next dev` | OPEN host | OPEN host, custom domain |
+| Mobile | Expo dev server (Expo Go or dev client) → local API on the LAN / `10.0.2.2` from the emulator | EAS `preview` build → staging API | EAS `production` build → Play Store → prod API |
 
 ## 2. Environment variables (names only)
 
-### apps/api: `cmd/api`
+### Root `.env` (docker-compose)
+
+`POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`
+
+### apps/api (planned; see `apps/api/.env.example`)
 
 | Name | Purpose |
 | --- | --- |
 | `APP_ENV` | `local` \| `staging` \| `production` |
-| `PORT` | HTTP port |
-| `LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
-| `DATABASE_URL` | Neon **pooled** connection string (role `arth_app`) |
-| `DATABASE_URL_DIRECT` | Neon **direct** string (migrations, River listener) |
-| `MIGRATIONS_DATABASE_URL` | Direct string with role `arth_migrator` (pre-deploy migrate only) |
-| `CLERK_SECRET_KEY` | Clerk Backend API (provisioning, account deletion) |
-| `CLERK_ISSUER` | Expected `iss` (Clerk Frontend API URL); JWKS is derived from it |
-| `CLERK_AUTHORIZED_PARTIES` | Comma-separated allowed `azp` origins |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated web origins |
-| `GEMINI_API_KEY` | Server-side only |
-| `GEMINI_MODEL` | e.g. the flash-lite model currently used (`gemini-3.1-flash-lite`) |
-| `AI_DRIVER` | `gemini` \| `fake` |
-| `AI_RATE_LIMIT_PER_HOUR` | Per-user limit for `/v1/ai/*` |
-| `MAX_UPLOAD_BYTES` | Upload cap |
-| `UNSUBSCRIBE_SIGNING_KEY` | HMAC key for unsubscribe tokens (shared with the worker) |
-| `APP_PUBLIC_URL` | Web base URL (links) |
-
-### apps/api: `cmd/worker`
-
-| Name | Purpose |
-| --- | --- |
-| `APP_ENV`, `LOG_LEVEL` | as above |
-| `DATABASE_URL_DIRECT` | River requires LISTEN/NOTIFY → direct connection |
-| `RESEND_API_KEY` | Email provider |
-| `EMAIL_FROM` | e.g. `Arth <alerts@mail.<domain>>` |
-| `EMAIL_REPLY_TO` | Support address |
-| `EMAIL_DRIVER` | `resend` \| `log` |
-| `EMAIL_ALLOWLIST` | Staging only: comma-separated recipients allowed |
-| `EMAIL_LOGO_URL` | Public logo URL for email header (optional) |
-| `GEMINI_API_KEY`, `GEMINI_MODEL`, `AI_DRIVER` | Weekly tips |
-| `UNSUBSCRIBE_SIGNING_KEY` | Build unsubscribe links |
+| `PORT`, `LOG_LEVEL` | HTTP port, log level |
+| `DATABASE_URL` | App role connection string |
+| `MIGRATIONS_DATABASE_URL` | Migration role (DDL) connection string |
+| `AUTH_ACCESS_TOKEN_SIGNING_KEY` | Access-token signing key (+ an optional previous key for rotation) |
+| `AUTH_ACCESS_TOKEN_TTL`, `AUTH_REFRESH_TOKEN_TTL` | Token lifetimes (`docs/AUTH.md` Q-2, Q-4) |
+| `CORS_ALLOWED_ORIGINS` | Web origins |
 | `APP_PUBLIC_URL` | Links in emails |
+| `AI_DRIVER`, `EMAIL_DRIVER`, `STORAGE_DRIVER` | Provider selection (`fake`/`log`/`none` locally) |
+| *(vendor keys)* | Added only after each OPEN provider decision |
 
-### apps/web
+### apps/web (later)
 
-| Name | Purpose |
+`NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_APP_ENV` (plus cookie/auth settings once D-OPEN-6 is decided). No secrets in `NEXT_PUBLIC_*`.
+
+### apps/mobile
+
+| Name | Status |
 | --- | --- |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk (public) |
-| `CLERK_SECRET_KEY` | Clerk middleware/server (server only) |
-| `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | Routes |
-| `NEXT_PUBLIC_API_BASE_URL` | Go API base URL |
-| `NEXT_PUBLIC_APP_ENV` | Display/env banner |
+| `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` | **Legacy**, needed to run today, removed in Phase 4 |
+| `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY` | **Legacy**, removed in Phase 4 |
+| `EXPO_PUBLIC_GEMINI_API_KEY` | **Legacy and unsafe** (AI key in the bundle). Removed in Phase 4; revoke the key |
+| `EXPO_PUBLIC_API_BASE_URL` | Target (Phase 4) |
+| `EXPO_PUBLIC_APP_ENV` | Target |
 
-### apps/mobile (EAS environment variables per profile)
+## 3. CI/CD
 
-| Name | Purpose |
-| --- | --- |
-| `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk (public) |
-| `EXPO_PUBLIC_API_BASE_URL` | Go API base URL |
-| `EXPO_PUBLIC_APP_ENV` | `development` \| `preview` \| `production` |
-| `EXPO_PUBLIC_BACKEND` | Transitional (Months 1–2): `supabase` \| `api`. Delete at cut-over |
-| `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY` | Transitional. Delete at cut-over |
-| ~~`EXPO_PUBLIC_GEMINI_API_KEY`~~ | **Remove.** Must never exist in a release build |
+There is no Git remote yet (D-13), so there is no CI. Until there is, run the checks locally before every commit:
 
-Anything `EXPO_PUBLIC_*` / `NEXT_PUBLIC_*` is public by definition. Never put secrets there.
+- Mobile: `pnpm verify:mobile` (tsc + eslint + Android bundle) or `/verify-mobile`.
+- API: `go vet ./...` and `go test ./...` against docker-compose Postgres. `sqlc vet` once sqlc exists.
+- Contract: regenerate stubs/client and check `git diff --exit-code`.
 
-### CI (GitHub Actions secrets / environments)
+When a remote exists, the same checks become path-filtered GitHub Actions workflows: `api` (apps/api/**, api/openapi.yaml), `web`
+(apps/web/**, packages/api-client/**), `mobile` (apps/mobile/**, packages/api-client/**), `contract` (api/openapi.yaml).
 
-`RAILWAY_TOKEN` **or** `RENDER_API_KEY` (+ service ids), `EXPO_TOKEN`, `MIGRATIONS_DATABASE_URL_STAGING`, `MIGRATIONS_DATABASE_URL_PROD`
-(only if migrations run from CI rather than as a provider pre-deploy command), and the Play service-account JSON for `eas submit` (stored in EAS, not GitHub).
-Vercel deploys through its Git integration, so no token is needed in GitHub.
-
-## 3. CI/CD (path-filtered GitHub Actions)
-
-| Workflow | Triggers (paths) | Jobs |
-| --- | --- | --- |
-| `api.yml` | `apps/api/**`, `api/openapi.yaml` | `gofmt`/`go vet`, `go test ./...` against a Postgres service container (migrations applied), `sqlc diff` (generated code current), regenerate oapi stubs + `git diff --exit-code`, `govulncheck`, build Docker image. On `main`: deploy to staging. On tag `api-v*` (GitHub Environment `production` with manual approval): deploy prod |
-| `web.yml` | `apps/web/**`, `packages/api-client/**` | install (pnpm, cached), typecheck, lint, `next build`. Deploys are handled by Vercel (preview per PR, prod on `main`) |
-| `mobile.yml` | `apps/mobile/**`, `packages/api-client/**` | typecheck, lint, `expo-doctor`. On `main`: `eas update --channel preview`. On tag `mobile-v*`: `eas build -p android --profile production` + `eas submit` |
-| `contract.yml` | `api/openapi.yaml`, `packages/api-client/**` | Lint the spec (tool TBD), regenerate the TS client, `git diff --exit-code` |
-
-Use `dorny/paths-filter`-style filtering, or plain `on.push.paths` per workflow (adding a third-party action counts as a dependency, so ask).
-
-## 4. Release steps
+## 4. Release steps (once hosts are chosen)
 
 ### API + worker
 
-1. PR → `api.yml` green → merge to `main` → image built once, tagged with the commit SHA.
-2. Staging: the provider **pre-deploy command** runs `api migrate up` (role `arth_migrator`, direct URL), then rolls out API + worker.
-3. Smoke test: `/readyz`, sign in on the preview mobile/web build, create and delete a transaction.
-4. Prod: tag `api-vX.Y.Z` → approval → same image → pre-deploy migrate → rollout.
-5. Migrations follow **expand → deploy → contract** (never drop or rename a column that a deployed API or a mobile build in the field still uses).
-6. Rollback: redeploy the previous image. Migrations are forward-only, which is why expand/contract matters.
+1. Build one Docker image (multi-stage, static Go binary) and tag it with the git SHA.
+2. Run `api migrate up` (migration role) before rolling out. Migrations are expand → contract only.
+3. Roll out API + worker, then smoke test `/readyz`, register/login, create and delete a transaction.
+4. Rollback = previous image. Migrations are forward-only.
 
 ### Web
 
-1. PR → Vercel preview (points at the staging API) → review.
-2. Merge to `main` → Vercel production. Rollback = "Promote" a previous deployment in Vercel.
+Build `next build`, deploy to the chosen host, smoke-test login + dashboard.
 
 ### Mobile (Android first)
 
-1. JS-only change: merge → `eas update --channel preview` → test → `eas update --channel production` (only for builds with a matching `runtimeVersion`).
-2. Native change, or a new version: bump `version` (+ `android.versionCode` via EAS remote versioning) → tag `mobile-vX.Y.Z` →
-   `eas build -p android --profile production` → `eas submit -p android` to the **internal/closed** track → test → promote to production with a staged rollout.
-3. Each API release must stay compatible with every mobile version still in use (see `/v1` rules in `docs/API.md`).
-4. iOS (post-MVP): same profiles plus `-p ios`, TestFlight, App Store review.
+1. JS-only change: `eas update --channel <preview|production>` (only for builds with a matching `runtimeVersion`).
+2. Native change or new version: bump `version` (EAS remote `versionCode`), run `eas build -p android --profile production`, then `eas submit -p android`
+   to the internal/closed track, test, and promote with a staged rollout.
+3. The API stays backward-compatible with every mobile version in the field (`/v1` additive only).

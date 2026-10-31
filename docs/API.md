@@ -9,7 +9,7 @@
 | Topic | Rule |
 | --- | --- |
 | Base URL | `https://api.<domain>/v1` (staging: `https://api.staging.<domain>/v1`; local: `http://localhost:8080/v1`) |
-| Auth | `Authorization: Bearer <Clerk session JWT>` on everything under `/v1` except `/v1/public/*`. Missing or invalid → `401`. |
+| Auth | Own auth (`docs/AUTH.md`). `Authorization: Bearer <access token>` on everything under `/v1` except `POST /v1/auth/register`, `login`, `refresh` and `/v1/public/*`. Missing, invalid or expired → `401` (the client refreshes once, then signs out). Web transport may become a cookie (OPEN). |
 | Ownership | The server derives `user_id` from the token. Clients never send `user_id`. Another user's resource → `404` (not `403`). |
 | Format | JSON, UTF-8, `snake_case` fields. Unknown request fields → `400`. Responses may gain fields at any time (clients must ignore unknown fields). |
 | IDs | UUID strings. |
@@ -21,10 +21,10 @@
 | Filtering | Plain query params, AND-combined: `type`, `account_id`, `category_id`, `from`, `to`, `q` (substring on description, ≤ 100 chars). Repeatable params (`account_id=a&account_id=b`) where the spec says so. |
 | Sorting | Fixed per endpoint for MVP (transactions: `occurred_on desc, created_at desc, id desc`). |
 | Writes | `POST` creates (`201` + body + `Location`). `PATCH` partially updates (omitted = unchanged, `null` = clear where allowed). `PUT` upserts singletons (budgets). `DELETE` → `204`. |
-| Idempotency | `Idempotency-Key: <uuid>` accepted on `POST /v1/transactions`, `/v1/transfers`, `/v1/ai/*` (implemented in the Month 5 hardening; the header is ignored before then). |
+| Idempotency | `Idempotency-Key: <uuid>` accepted on `POST /v1/transactions`, `/v1/transfers`, `/v1/ai/*` (implemented in the hardening phase; ignored before then). |
 | Tracing | The response always carries `X-Request-Id` (echoed if the client sends one). |
-| Rate limits | `/v1/ai/*`: per user (initial: 30/hour, 100/day). `429` + `Retry-After`. |
-| CORS | Allowlist of web origins (prod, staging, Vercel preview pattern). Mobile is not subject to CORS. |
+| Rate limits | `/v1/auth/*`: per IP and per email (`docs/AUTH.md` §5). `/v1/ai/*`: per user (initial: 30/hour, 100/day). `429` + `Retry-After`. |
+| CORS | Allowlist of web origins (configured per environment). Mobile is not subject to CORS. |
 | Versioning | Additive changes only within `/v1`. Breaking change → `/v2` running in parallel. Old mobile builds supported ≥ 6 months. |
 | Uploads | `multipart/form-data`, a single `file` part. Limits per endpoint. Wrong type → `415`, too big → `413`. |
 
@@ -48,7 +48,11 @@ Internal errors return `500` with `code: internal` and no internals. Details go 
 | Status | `code` | When |
 | --- | --- | --- |
 | 400 | `bad_request` | Malformed JSON, unknown field, bad cursor |
-| 401 | `unauthorized` | Missing, invalid or expired token |
+| 401 | `unauthorized` | Missing, invalid or expired access token |
+| 401 | `invalid_credentials` | Login with a wrong email or password (same response for both) |
+| 401 | `refresh_invalid` | Refresh token unknown, expired, revoked, or reused (reuse also revokes the session) |
+| 409 | `email_taken` | Register with an existing email (enumeration trade-off: `docs/AUTH.md` §10) |
+| 422 | `weak_password` | Password fails the policy (`docs/AUTH.md` §4) |
 | 404 | `not_found` | Missing **or not yours** |
 | 409 | `conflict` | Generic state conflict |
 | 409 | `account_has_transactions` | `DELETE /accounts/{id}` without `cascade=true`. Extra field `transaction_count` |
@@ -60,12 +64,12 @@ Internal errors return `500` with `code: internal` and no internals. Details go 
 | 415 | `unsupported_media_type` | Upload type not allowed |
 | 422 | `validation_failed` | Schema-valid but semantically invalid (`errors[]` populated) |
 | 429 | `rate_limited` | See rate limits |
-| 502 | `ai_unavailable` | Gemini failed or timed out after retries |
+| 502 | `ai_unavailable` | The AI provider (OPEN) failed or timed out after retries |
 | 500 | `internal` | Anything else |
 
 ## 3. Resources & endpoints
 
-MVP = needed for launch. POST = post-MVP. Each row maps to a row in `docs/MIGRATION.md` §1.
+MVP = needed for launch. POST = post-MVP. Each row maps to a row in `docs/MIGRATION.md` (§1–§4).
 
 ### System
 
@@ -74,17 +78,36 @@ MVP = needed for launch. POST = post-MVP. Each row maps to a row in `docs/MIGRAT
 | GET | `/healthz` | Liveness, no DB | MVP |
 | GET | `/readyz` | DB ping + migrations at the expected version | MVP |
 
+### Auth (own; design in `docs/AUTH.md`)
+
+| Method | Path | Body → Response | Auth | Scope |
+| --- | --- | --- | --- | --- |
+| POST | `/v1/auth/register` | `{email, password, name, client: MOBILE\|WEB}` → `201 TokenPair` | none, rate-limited | MVP |
+| POST | `/v1/auth/login` | `{email, password, client}` → `TokenPair` (`401 invalid_credentials` on failure) | none, rate-limited | MVP |
+| POST | `/v1/auth/refresh` | `{refresh_token}` → `TokenPair` (rotated; old token now used) | refresh token | MVP |
+| POST | `/v1/auth/logout` | `{refresh_token}` → `204` (revokes this session) | access token | MVP |
+| POST | `/v1/auth/logout-all` | → `204` (revokes every session of the user) | access token | MVP |
+| POST | `/v1/auth/password` | `{current_password, new_password}` → `204` (revokes other sessions) | access token | MVP |
+| POST | `/v1/auth/verify-email`, `/v1/auth/verify-email/resend` | `{token}` / — → `204` | — / access | OPEN (email) |
+| POST | `/v1/auth/password-reset/request`, `/v1/auth/password-reset/confirm` | `{email}` → `202` always / `{token, new_password}` → `204` | none, rate-limited | OPEN (email) |
+| GET / DELETE | `/v1/auth/sessions`, `/v1/auth/sessions/{id}` | list devices / revoke one | access token | POST |
+
+`TokenPair = {access_token, access_expires_in (seconds), refresh_token, refresh_expires_at, user: Me}`.
+`register` also creates the default "Cash" account in the same transaction. If web ends up using cookies (OPEN), the web variants set
+httpOnly cookies instead of returning tokens in the body.
+
 ### Me (current user)
 
 | Method | Path | Body → Response | Scope |
 | --- | --- | --- | --- |
-| GET | `/v1/me` | → `Me`. Provisions the user + default Cash account on first call (email/name from the Clerk Backend API) | MVP |
-| PATCH | `/v1/me` | `{default_currency?, timezone?, email_budget_alerts?, email_weekly_tips?}` → `Me` | MVP |
-| POST | `/v1/me/onboarding` | `{default_currency, timezone, opening_balance_minor}` → `Me` | MVP |
-| DELETE | `/v1/me` | → `204`. Deletes all data + the Clerk user | MVP |
+| GET | `/v1/me` | → `Me` | MVP |
+| PATCH | `/v1/me` | `{name?, currency?, timezone?, email_budget_alerts?, email_weekly_tips?}` → `Me` | MVP |
+| POST | `/v1/me/onboarding` | `{currency, timezone, opening_balance_minor}` → `Me` | MVP |
+| DELETE | `/v1/me` | `{password}` → `204`. Deletes all data and revokes all sessions | MVP |
+| PUT | `/v1/me/avatar` | multipart `file` → `Me` | OPEN (storage) |
 | GET | `/v1/me/export` | Full JSON data export | POST |
 
-`Me = {id, email, name, image_url, default_currency|null, timezone, needs_onboarding, email_budget_alerts, email_weekly_tips, created_at}`
+`Me = {id, email, email_verified, name, avatar_url|null, currency|null, timezone, needs_onboarding, email_budget_alerts, email_weekly_tips, created_at}`
 
 ### Categories
 
@@ -173,7 +196,7 @@ Nothing is persisted. The client reviews the result and then calls `POST /v1/tra
 ### Post-MVP resources (shape TBD in the spec when built)
 
 `/v1/recurring-rules` (CRUD + `pause`/`resume`), `/v1/goals` (CRUD), `/v1/attachments` (presigned upload: `POST` → `{upload_url, attachment_id}`,
-then link it on the transaction), `/v1/devices` (push tokens), `/webhooks/clerk` (`user.updated`/`user.deleted`, Svix-signed).
+then link it on the transaction; needs object storage, OPEN), `/v1/devices` (push tokens; push provider OPEN).
 
 ## 4. Client generation
 
