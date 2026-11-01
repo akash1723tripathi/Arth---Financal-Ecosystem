@@ -28,10 +28,3 @@ export const changePasswordSchema = z.object({
 });
 
 export type ChangePasswordFormValues = z.infer<typeof changePasswordSchema>;
-
-// LEGACY (Clerk email codes), removed with Clerk.
-export const codeSchema = z.object({
-  code: z.string().min(1, "Enter the verification code."),
-});
-
-export type CodeFormValues = z.infer<typeof codeSchema>;

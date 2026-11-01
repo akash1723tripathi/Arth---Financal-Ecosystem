@@ -12,11 +12,5 @@ const DEFAULT_API_URL = Platform.OS === "android" ? "http://10.0.2.2:8080" : "ht
 
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL).replace(/\/+$/, "");
 
-/**
- * TEMPORARY switch while the app moves from the Welth stack to the Go API (removed in the last repoint step).
- * Clerk/Supabase auth and Go auth cannot be mixed, so the whole app runs on one of them: "api" (default) or "supabase".
- */
-export const BACKEND: "api" | "supabase" = process.env.EXPO_PUBLIC_BACKEND === "supabase" ? "supabase" : "api";
-
 /** Public privacy policy URL (required for the Play listing). Placeholder until it is published (D-OPEN-11). */
 export const PRIVACY_POLICY_URL = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || "";

@@ -64,8 +64,7 @@
           "cameraPermission": "Allow Arth to access your camera to scan receipts."
         }
       ],
-      "expo-asset",
-      "@clerk/expo"
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

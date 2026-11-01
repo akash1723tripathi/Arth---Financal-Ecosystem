@@ -1,8 +1,6 @@
-import { ClerkSignUp } from "@/components/legacy/ClerkSignUp";
 import { useRegister } from "@/hooks/mutations/useAuthMutations";
 import { isApiError } from "@/lib/api/client";
 import { describeError } from "@/lib/api/errors";
-import { BACKEND } from "@/lib/config";
 import { SignUpFormValues, signUpSchema } from "@/lib/schemas/auth";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "expo-router";
@@ -19,7 +17,7 @@ import {
   View,
 } from "react-native";
 
-function SignUpScreen() {
+export default function SignUpScreen() {
   const { mutateAsync: register, isPending: isLoading } = useRegister();
   const [emailError, setEmailError] = useState("");
   const [passwordError, setPasswordError] = useState("");
@@ -206,5 +204,3 @@ function SignUpScreen() {
     </KeyboardAvoidingView>
   );
 }
-
-export default BACKEND === "supabase" ? ClerkSignUp : SignUpScreen;

@@ -1,8 +1,6 @@
-import { ClerkSignIn } from "@/components/legacy/ClerkSignIn";
 import { useLogin } from "@/hooks/mutations/useAuthMutations";
 import { isApiError } from "@/lib/api/client";
 import { describeError } from "@/lib/api/errors";
-import { BACKEND } from "@/lib/config";
 import { SignInFormValues, signInSchema } from "@/lib/schemas/auth";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "expo-router";
@@ -19,7 +17,7 @@ import {
   View,
 } from "react-native";
 
-function SignIn() {
+export default function SignIn() {
   const { mutateAsync: login, isPending: isLoading } = useLogin();
   const [serverError, setServerError] = useState("");
 
@@ -143,5 +141,3 @@ function SignIn() {
     </KeyboardAvoidingView>
   );
 }
-
-export default BACKEND === "supabase" ? ClerkSignIn : SignIn;

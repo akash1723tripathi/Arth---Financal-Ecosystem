@@ -1,11 +1,9 @@
 import { useMeQuery } from "@/hooks/queries/useMeQuery";
 import { useSignedIn } from "@/hooks/useSignedIn";
-import { useUserSync } from "@/hooks/useUserSync";
 import { describeError } from "@/lib/api/errors";
-import { API_URL, BACKEND } from "@/lib/config";
-import { useUserStore } from "@/store/userStore";
+import { API_URL } from "@/lib/config";
 import { Feather } from "@expo/vector-icons";
-import { Redirect, Slot, Stack, usePathname } from "expo-router";
+import { Redirect, Stack, usePathname } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 
@@ -27,7 +25,7 @@ function Splash() {
 }
 
 /** Own auth: gate on the session, then on GET /v1/me → needs_onboarding. */
-function RootGroupLayout() {
+export default function RootGroupLayout() {
   const { isSignedIn, isLoaded } = useSignedIn();
   const pathname = usePathname();
   const minLoadDone = useMinimumSplash();
@@ -67,22 +65,3 @@ function RootGroupLayout() {
   // A stack so pushed screens (edit transaction) get back navigation over the tabs.
   return <Stack screenOptions={{ headerShown: false }} />;
 }
-
-// LEGACY (EXPO_PUBLIC_BACKEND=supabase): Clerk gate + useUserSync. Removed with Clerk.
-function LegacyRootGroupLayout() {
-  const { isSignedIn, isLoaded } = useSignedIn();
-  const needsOnboarding = useUserStore((state) => state.needsOnboarding);
-  const pathname = usePathname();
-  const minLoadDone = useMinimumSplash();
-
-  useUserSync();
-
-  if (!isLoaded) return null;
-  if (!isSignedIn) return <Redirect href="/sign-in" />;
-  if (!minLoadDone || needsOnboarding === null) return <Splash />;
-  if (needsOnboarding && pathname !== "/onboarding") return <Redirect href="/(root)/onboarding" />;
-
-  return <Slot />;
-}
-
-export default BACKEND === "supabase" ? LegacyRootGroupLayout : RootGroupLayout;
