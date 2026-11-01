@@ -1,6 +1,7 @@
 # Mobile screens: spec (also the spec for the web app)
 
-This describes **exactly what `apps/mobile` does today** (Welth UI, renamed to Arth), screen by screen. The Next.js session mirrors these
+This describes the Welth UI the app keeps (renamed to Arth), screen by screen. **Since the repoint (2026-11-01) the data comes from
+the Go API; the behaviour changes are listed in §12** (read that first; §2–§10 still describe layout and the pre-repoint calls). The Next.js session mirrors these
 screens (`docs/WEB_APP.md`), and the repoint session keeps the UI and swaps the data source. Paths are relative to `apps/mobile/`.
 "Legacy calls" are what each screen calls today. "Target" is the Go endpoint (`docs/API.md`). Full call inventory with line numbers:
 `docs/MIGRATION.md`.
@@ -381,3 +382,19 @@ Chat history lives in component state only and is not persisted.
 | Share sheet CSV | Browser download |
 | Pull-to-refresh | Refetch on focus + a refresh button |
 | Missing error states on Home | Add an error state per card |
+
+## 12. Changes made by the repoint to the Go API (2026-11-01)
+
+| Screen | Change |
+| --- | --- |
+| All | Money is integer minor units: input via `parseMoneyInput` (exact, per-currency decimals, "450.50" → 45050), display via `formatMinor` with the currency's decimals (₹450.50, ¥1,500; Indian grouping for INR). Transaction rows use each transaction's own currency (the always-₹ bug is fixed). Categories (name, emoji, colour) come from `GET /v1/categories` |
+| Root gate | Own session (refresh token in secure storage); `GET /v1/me` decides onboarding. New error state "Can't reach the server…" + Retry (shows the API URL in dev builds) |
+| Sign in / Sign up | Email + password only (no verify-code views, no phone-code dead end). Errors: "Incorrect email or password.", "An account with this email already exists.", weak-password text, rate-limit text. Password 8–128 characters |
+| Onboarding | One call. The starting balance becomes the default account's opening balance (no "Starting balance" income row). Timezone = device zone |
+| Home | Figures from `GET /v1/dashboard` (server months in the user's timezone). Budget card also lists per-category budgets. Error state with Retry. Voice quick action and Ask-AI card only in dev builds |
+| Transactions | Keyset pages (30, load more at the end). Search is server-side (`q`, description only; it no longer matches category names). Chart from `GET /v1/reports/daily`. Tap a row → **Edit transaction** screen. Export downloads the server CSV (last 30 days, account filter applied, type filter and search ignored) named `arth-transactions-<from>-<to>.csv` |
+| Add / Edit transaction | Shared form; edit uses `PATCH`. Amount label shows the account currency. Receipt scan uploads the photo to the server (dev label "demo extraction"); voice card only in dev builds and explains it has no endpoint yet |
+| Assistant | Hidden in release builds; dev builds show the chat marked "DEV ONLY · not connected" with a placeholder reply |
+| Budget sheet | Scope pills (Overall + expense categories), "Remove budget" |
+| Profile | Name/email from `/v1/me`. Avatar tap → "Profile photos aren't available yet." (storage OPEN). Currency change refused after transactions (`currency_locked`). New rows: Change password, Sign out of all devices, Delete account (password), About → Privacy policy (placeholder until `EXPO_PUBLIC_PRIVACY_POLICY_URL` is set). Biometric switch unchanged (still UI only) |
+| Account sheet | Deleting the default account shows "You can't delete your default account…" |

@@ -12,7 +12,9 @@ the generated strict-server operation). `implemented (Go API session, 2026-11-01
 handler (the lead verifies with tests at the end of the session). `not built (reason)` = deliberately left out (`docs/DECISIONS.md` D-21).
 `n/a` = client-side only, nothing to build on the server.
 
-Nothing here is removed yet. The repoint happens in session 4 ("repoint mobile"), after the Go API (session 2) and the web app (session 3).
+**Status (2026-11-01, branch `feat/mobile-go-wiring`): the client side of §1–§3 is DONE.** Every Clerk, Supabase and Gemini call in
+`apps/mobile` is gone (the file:line references below point at the pre-repoint code, `git show main:apps/mobile/...`). The repoint ran
+before the web app (D-31). Still open: the worker jobs (§4) and deleting `legacy/` (nothing imports it).
 
 ---
 
@@ -65,7 +67,7 @@ The ZIP copy had `app/_layout.tsx`, `app/index.tsx` and `app/(root)/_layout.tsx`
 | U2 | `hooks/useUserSync.ts:35-49` | Upsert user with client-supplied email/name/image | *(gone)* | — | — | `register` creates the user. The email comes from the registration form and is the login identity. | `POST /v1/auth/register` → `apps/api/internal/httpapi/server_auth.go` (`Register`): implemented (Go API session, 2026-11-01) |
 | U3 | `hooks/useUserSync.ts:60-62` | Insert default "Cash" account | *(in register)* | — | — | Same DB tx as the user insert. Currency INR as a placeholder until onboarding (D-19). | `POST /v1/auth/register` → `apps/api/internal/httpapi/server_auth.go` (`Register`): implemented (Go API session, 2026-11-01) |
 | U4–U7 | `app/(root)/onboarding.tsx:50-55, 63-68, 76-85, 93-96` | Update currency → find default account → insert "Starting balance" INCOME → update balance (4 calls, not atomic) | `POST /v1/me/onboarding` | `{currency, timezone, opening_balance_minor}` → `Me` | token | **MVP.** One tx. The starting balance becomes `accounts.opening_balance_minor`, not income. `409 already_onboarded`; `409 currency_locked` if the default account already has transactions. | `POST /v1/me/onboarding` → `apps/api/internal/httpapi/server_me.go` (`CompleteOnboarding`): implemented (Go API session, 2026-11-01) |
-| U8 | `app/(root)/(tabs)/profile.tsx:174-177` | Update currency | `PATCH /v1/me` | `{name?, currency?, timezone?, email_budget_alerts?, email_weekly_tips?}` → `Me` | token | **MVP.** Per the spec, changing the default currency does not change existing accounts, and `updateMe` declares no `409`. | `PATCH /v1/me` → `apps/api/internal/httpapi/server_me.go` (`UpdateMe`): implemented (Go API session, 2026-11-01) |
+| U8 | `app/(root)/(tabs)/profile.tsx:174-177` | Update currency | `PATCH /v1/me` | `{name?, currency?, timezone?, email_budget_alerts?, email_weekly_tips?}` → `Me` | token | **MVP.** Changing the default currency does not change existing accounts. Once the user has any transaction → `409 currency_locked` (declared in the spec since commit `119dc14`; the app shows a message). | `PATCH /v1/me` → `apps/api/internal/httpapi/server_me.go` (`UpdateMe`): implemented (Go API session, 2026-11-01) |
 | U9 | *(new)* | — | `DELETE /v1/me` | `{password}` → `204` | token + password re-check | **MVP** (Play requires account deletion). Cascades all data, revokes all sessions. Wrong password → `401 invalid_credentials`. | `DELETE /v1/me` → `apps/api/internal/httpapi/server_auth.go` (`DeleteMe`): implemented (Go API session, 2026-11-01) |
 | U10 | `profile.tsx:89, 285` | Biometric switch (UI state only, never persisted) | none | — | — | Device-local feature (needs `expo-local-authentication`, ask first) or remove. | n/a (device-local) |
 
@@ -132,7 +134,7 @@ The job queue is Postgres-backed (River proposed, `docs/DECISIONS.md`). Jobs are
 
 Manual trigger for testing (planned): `go run ./cmd/worker run <job>`. There is no HTTP trigger.
 
-## 5. Mobile: what gets removed and what replaces it (session 4)
+## 5. Mobile: what was removed and what replaced it (done 2026-11-01)
 
 **Remove:** `@clerk/expo`, `@supabase/supabase-js`, `lib/supabase.ts`, `hooks/useSupabase.ts`, `hooks/useUserSync.ts`, Supabase-backed
 `lib/services/{accounts,transactions,budgets}.ts`, `lib/services/extractTransaction.ts`, `lib/services/assistant.ts`, the direct calls in
@@ -167,6 +169,12 @@ Voice and assistant stay hidden in release builds until their endpoints exist.
 13. Unused dependency `react-native-linear-gradient` (the code uses `expo-linear-gradient`).
 
 ## 7. Provenance & licence checklist (third-party Welth code)
+
+Repoint session (2026-11-01) rewrites, so the Welth share of these files shrank: the data/auth layer (`hooks/**`, `lib/**`, `store/**`)
+is new code; `app/(auth)/sign-in.tsx`, `sign-up.tsx`, `onboarding.tsx`, `(tabs)/index.tsx`, `transactions.tsx`, `assistant.tsx`,
+`components/TransactionRow.tsx`, `BudgetModal.tsx`, `CurrencyPicker.tsx` and `TransactionForm.tsx` (moved out of `add-transaction.tsx`) keep
+Welth's layout/JSX and classes but their logic was rewritten; `ChangePasswordModal`, `DeleteAccountModal`, `app/(root)/transaction/[id].tsx`
+are new. `constants/categories.ts` (copied labels/colours) and `types/*` were deleted.
 
 No LICENSE upstream or here. The README presents it as a course project. **Assume no redistribution rights until the author grants them.**
 Before launch, each item is rewritten, replaced or cleared in writing.

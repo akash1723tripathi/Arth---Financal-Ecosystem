@@ -2,9 +2,8 @@
 
 Steps for **Windows PowerShell**. Variable **names** only; get values from your own dashboards and never commit them.
 
-> The app still runs on the **legacy Welth stack**: it needs a Clerk dev instance, a Supabase project with the legacy schema, and
-> (for AI features) a Gemini key. Without the Clerk key, the app throws on start (`app/_layout.tsx:11-13`). After the repoint session
-> (Phase 4) these are replaced by the local Go API.
+> Since the repoint (2026-11-01) the app talks only to the local **Go API**. No Clerk, Supabase or AI keys are needed.
+> The quickest full path (DB → API → demo data → emulator) is **`docs/PREVIEW_LOCALLY.md`**; this page covers the Android tooling.
 
 ## 1. One-time prerequisites
 
@@ -45,22 +44,15 @@ pnpm install          # from the repo root; uses nodeLinker: hoisted
 
 ## 3. Environment file (names only)
 
-```powershell
-Copy-Item apps\mobile\.env.example apps\mobile\.env
-notepad apps\mobile\.env
-```
+None is needed on the emulator: the app defaults to `http://10.0.2.2:8080` (the PC's localhost as seen from the emulator).
+Optional `apps\mobile\.env` (copy `apps\mobile\.env.example`):
 
-Fill in (legacy, until Phase 4):
-
-| Name | Where it comes from |
+| Name | What |
 | --- | --- |
-| `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk dashboard → your dev instance → API keys (publishable key) |
-| `EXPO_PUBLIC_SUPABASE_URL` | Supabase project → Settings → API → Project URL |
-| `EXPO_PUBLIC_SUPABASE_KEY` | Supabase project → Settings → API → anon/publishable key |
-| `EXPO_PUBLIC_GEMINI_API_KEY` | Google AI Studio. **Unsafe: compiled into the bundle.** Use a throwaway, low-quota key and delete it in Phase 4 |
+| `EXPO_PUBLIC_API_URL` | API base URL, e.g. `http://192.168.1.23:8080` for a physical phone (`docs/PREVIEW_LOCALLY.md` §6) |
+| `EXPO_PUBLIC_PRIVACY_POLICY_URL` | Privacy policy page; empty = placeholder message |
 
-The Supabase project needs `legacy/scripts/schema.sql` applied, and Clerk configured as a third-party auth provider (see `legacy/WELTH_README.md`).
-`apps/mobile/.env` is gitignored. Do not paste these values anywhere else.
+Everything `EXPO_PUBLIC_*` is public (compiled into the bundle). The API itself must be running: `docs/PREVIEW_LOCALLY.md` §2.
 
 ## 4. Run on the emulator
 
@@ -95,7 +87,7 @@ pnpm verify:mobile     # tsc --noEmit + eslint + expo export --platform android
 | Symptom | Fix |
 | --- | --- |
 | `pnpm` not recognised | Section 1 step 3. Then open a new terminal |
-| Red screen "Add your Clerk Publishable Key" | `apps/mobile/.env` missing or `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` empty. Restart Metro after editing `.env` |
+| "Can't reach the server" in the app | The API isn't running or isn't reachable from the emulator: `docs/PREVIEW_LOCALLY.md` §5 |
 | Stale bundle / odd module errors | `pnpm --filter @arth/mobile start -- --clear` |
 | `Unable to resolve module react-native-css-interop/jsx-runtime` | Someone removed `nodeLinker: hoisted` from `pnpm-workspace.yaml`. Restore it, delete `node_modules`, `pnpm install` |
 | Emulator can't reach Metro | Allow Node through Windows Firewall (private networks). Check `adb reverse tcp:8081 tcp:8081` |

@@ -221,6 +221,7 @@ then link it on the transaction; needs object storage, OPEN), `/v1/devices` (pus
   `apps/api/internal/httpapi/server_*.go`. Requests are validated against the embedded spec by kin-openapi `openapi3filter`
   middleware (D-17).
 - TS: **openapi-typescript + openapi-fetch** (decided by the owner 2026-11-01, `docs/DECISIONS.md` D-OPEN-10). `packages/api-client`
-  is generated from the same file and set up in the web session. Planned exports: types, `createApiClient({ baseUrl, getToken })`,
-  `ApiError`, and money helpers (`@arth/api-client/money`).
+  (`@arth/api-client`) is generated from the same file with `pnpm gen:api` (built in the mobile repoint, 2026-11-01). Exports: types,
+  `createArthClient({ baseUrl, fetch })`, `ApiError` + `unwrap`, money helpers (`@arth/api-client/money`) and the session core
+  (`@arth/api-client/session`: one serialized refresh, retry once on `401 unauthorized`).
 - CI fails if regenerating either one produces a diff (once a remote and CI exist).

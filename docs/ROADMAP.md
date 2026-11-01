@@ -57,19 +57,25 @@ Domain [MVP]
 
 ## Phase 3: Next.js web (Jan 2027)
 
-- [ ] `apps/web` scaffold with `@arth/api-client` + TanStack Query. Auth transport decided [OPEN D-OPEN-6]
+- [ ] `apps/web` scaffold with `@arth/api-client` (exists since Phase 4) + TanStack Query. Auth transport decided [OPEN D-OPEN-6]
 - [ ] [MVP] Every screen in `docs/MOBILE_SCREENS.md`: auth, onboarding, dashboard, transactions (+ export), add/edit transaction, accounts, budget, settings
 - [ ] [MVP] Public pages: privacy, terms, delete-account (Play requirement), unsubscribe
 - [ ] Hosting decided [OPEN D-OPEN-5]
 
-## Phase 4: Repoint mobile + drop Clerk/Supabase (Feb 2027)
+## Phase 4: Repoint mobile + drop Clerk/Supabase (done 2026-11-01, before Phase 3: D-31)
 
-- [ ] AuthProvider + secure-store tokens. Register/login/logout screens on the API (UI kept)
-- [ ] Slice by slice (`docs/MIGRATION.md` §5): me/onboarding → accounts → transactions → budget → dashboard → export → receipt scan
-- [ ] Money helpers replace `parseFloat`. `occurred_on` dates. Transaction rows use the user's currency (fix MIGRATION §6.5)
-- [ ] Remove `@clerk/expo`, `@supabase/supabase-js`, the client Gemini code and the `EXPO_PUBLIC_*` legacy vars. **Revoke the old Gemini key**
-- [ ] Voice + assistant hidden in release builds [POST until their endpoints exist]
-- [ ] Delete `legacy/`
+> Branch `feat/mobile-go-wiring`. tsc + lint + Android bundle green after every step; live checks against the local API.
+> The emulator pass itself is Phase 5 (no Android SDK on the dev PC yet).
+
+- [x] AuthProvider + secure-store tokens. Register/login/logout screens on the API (UI kept); logout-all, change password, delete account
+- [x] Slice by slice (`docs/MIGRATION.md` §5): me/onboarding → accounts → transactions → budget → dashboard → export → receipt scan
+- [x] Money helpers replace `parseFloat`. `occurred_on` dates. Transaction rows use their own currency (fix MIGRATION §6.5)
+- [x] `packages/api-client` generated (openapi-typescript + openapi-fetch, `pnpm gen:api`)
+- [x] Remove `@clerk/expo`, `@supabase/supabase-js`, the client Gemini code and the `EXPO_PUBLIC_*` legacy vars
+- [ ] **Revoke the old Gemini key** (manual, in Google AI Studio)
+- [x] Voice + assistant hidden in release builds [POST until their endpoints exist]
+- [x] Local preview tooling: `pnpm dev:db|dev:api|dev:seed|dev:mobile`, `docs/PREVIEW_LOCALLY.md`
+- [ ] Delete `legacy/` (nothing imports it; kept as reference for the worker port)
 
 ## Phase 5: Android emulator testing (Feb → early Mar 2027)
 

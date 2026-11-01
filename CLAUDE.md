@@ -10,16 +10,17 @@ Solo developer, 6-month MVP. The project started from the third-party Welth boil
 - **Done:** mobile app restructured into the monorepo and renamed to Arth (placeholder id `fyi.akashbuilds.arth`, scheme `arth`).
 - **Done:** Go API in `apps/api` with own auth: all 33 operations in `api/openapi.yaml`, 442 tests against real Postgres, live smoke test
   (branch `feat/go-api`). Not built: transfers, password reset/verification, worker jobs, real providers.
-- **Temporary:** the mobile app **still uses Clerk + Supabase + client-side Gemini**. These are marked "to be replaced" and must not be removed
-  until Phase 4 repoints mobile to the Go API.
+- **Done:** mobile repointed to the Go API (branch `feat/mobile-go-wiring`): own auth (secure-store tokens, one serialized refresh), every
+  screen on `/v1/*`, money as integer minor units via `@arth/api-client`. **Clerk, Supabase and the client Gemini key are removed.**
+  Local preview: `docs/PREVIEW_LOCALLY.md` (emulator run not yet done on this PC: no Android SDK installed).
 - **Next session:** the Next.js web app (`apps/web`); first decide D-OPEN-6 (web token transport). Full detail: `docs/PROGRESS.md`.
 
 ## Session order (decided)
 
 1. Mobile restructure ✅
 2. Go API incl. auth ✅
-3. Next.js web
-4. Repoint mobile to the Go API and drop Clerk/Supabase
+3. Repoint mobile to the Go API and drop Clerk/Supabase ✅ (done before web, owner's call 2026-11-01, D-31)
+4. Next.js web
 5. Android emulator testing
 6. Hardening
 7. Play closed test
@@ -31,7 +32,7 @@ Solo developer, 6-month MVP. The project started from the third-party Welth boil
 apps/mobile/          Expo SDK 54 app (Android first)          → apps/mobile/CLAUDE.md
 apps/api/             Go API (done for MVP) + worker (stub)            → apps/api/CLAUDE.md
 apps/web/             Next.js web app (placeholder)            → apps/web/CLAUDE.md
-packages/api-client/  TS client generated from the contract (placeholder)
+packages/api-client/  @arth/api-client: types generated from the contract (pnpm gen:api), openapi-fetch client, money, session core
 api/openapi.yaml      HTTP contract: single source of truth (OpenAPI 3.1, 33 operations)
 docker-compose.yml    local Postgres 16 (dev only)
 legacy/               Welth Supabase functions + SQL: reference only, deleted later

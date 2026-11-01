@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). Start every session by reading this file (`/status`).
+Last updated: **2026-11-01**, branch `feat/mobile-go-wiring` (mobile repoint complete; not pushed). Start every session by reading this file (`/status`).
 
 ## Session: wire mobile to the Go API (branch `feat/mobile-go-wiring`, 2026-11-01)
 
@@ -19,16 +19,58 @@ Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). St
 | 10 | Remove Clerk, Supabase, client Gemini, `EXPO_PUBLIC_BACKEND` | Done |
 | 11 | Local preview tooling (`dev:*`, seed, `docs/PREVIEW_LOCALLY.md`) | Done (kept in sync with later steps) |
 
+Commits (oldest first): `8baf22e` step 0 · `dd2c5b8` step 1 · `2a4841b` step 2 · `aeedb22` step 3 · `267f21f` step 11 · `d0b4ed5` step 4 ·
+`0632fd3` step 5 · `7f2ce76` step 6 · `fabc436` step 7 · `454edc5` step 8 · `6560d7c` step 9 · `e54c09e` step 10 · then this docs commit.
+`main` already contained `feat/go-api` (merge `310ed18`), so no merge was needed before branching.
+
+**The Go API was not changed** (`git diff main -- apps/api api/` is empty): no API bug was found.
+
+### How the temporary `EXPO_PUBLIC_BACKEND` switch worked (steps 1–9, deleted in step 10)
+
+It selected the auth system at the root (Clerk provider + Clerk screens vs own auth). Data slices were moved to the API one by one and
+were API-only once moved; screens not yet moved kept their legacy hooks under `hooks/legacy/` so every commit compiled. `supabase` mode was
+never run (no Clerk/Supabase credentials on this PC) and is gone now.
+
+### Verification evidence (commands actually run, final state)
+
+| Check | Result |
+| --- | --- |
+| Tools | Node v24.2.0, pnpm 10.34.9, go1.26.5 windows/amd64, Docker 29.5.3 (Desktop had to be started), Postgres 16 container `arth-postgres` |
+| Android | **No Android SDK / adb / emulator on this PC** (`adb` not found, no `%LOCALAPPDATA%\Android\Sdk`, no Java). Nothing ran on a device |
+| `pnpm verify:mobile` (tsc + eslint + `expo export --platform android`) | exit 0 after every step; final: tsc clean, **eslint 0 problems** (the 2 legacy warnings went with the deleted files), release bundle 7.24 MB (was 9.26 MB with Clerk/Supabase) |
+| Dev bundle | `npx expo export --platform android --dev` → 2420 modules bundled |
+| `npx expo install --check` | "Dependencies are up to date" |
+| `pnpm check:money` | 16 money checks passed ("450.50" INR → 45050, float traps like 0.29, JPY/KWD exponents, Indian grouping, round-trips for all 33 currencies) |
+| `pnpm --filter @arth/api-client typecheck` | exit 0 |
+| `pnpm --filter @arth/api-client live-check` (against the running local API) | 22 steps passed: register → login → wrong password 401 → `/v1/me` → "450.50" → 45050 → accounts (create/PATCH/make-default/default 409/`transaction_count` 409/cascade) → transactions (2 keyset pages, `q`, PATCH, DELETE restores balance, daily report) → budgets → dashboard totals = Σ balances → CSV export → receipt upload 200 + text/plain 415 → `currency_locked` → **5 parallel calls with an expired token = 1 refresh; 6 parallel 401s = 1 refresh, each retried once, session survives** → negative control: 2 unserialized refreshes → 200 + 401 and the session is revoked → refused refresh clears tokens → password change → logout → logout-all → DELETE /v1/me (wrong 401, right 204) |
+| `pnpm dev:api` | `go -C apps/api run ./cmd/api migrate up` → "no pending migrations", then "api listening addr=:8080" |
+| `pnpm dev:seed` | demo user + 3 accounts + 61 transactions + overall and 4 category budgets; dashboard total ₹3,39,738.10, this month expense ₹11,554.51 |
+| DB spot check | `amount_minor 45050, occurred_on 2026-11-01, "Groceries (₹450.50 check)"` for the demo user |
+| `go build ./...`, `go vet ./...` (apps/api) | ok (unchanged code) |
+| Release bundle grep | no Gemini URL, no `EXPO_PUBLIC_GEMINI` in the bytecode |
+
+### I must test manually (could not run here)
+
+- [ ] Install the Android SDK + an emulator (`docs/RUN_LOCALLY.md` §1), then the whole of `docs/PREVIEW_LOCALLY.md` §2 and the §7 checklist
+- [ ] Session restore after killing the app; silent refresh after > 15 min idle; sign-out redirects (route guards on device)
+- [ ] expo-secure-store on a real Android Keystore (only typechecked/bundled here)
+- [ ] Receipt scan with the camera and the gallery (RN `FormData` file upload `{uri, name, type}`: verified from Node with a Blob, not from RN)
+- [ ] CSV export share sheet (expo-file-system `File` + expo-sharing)
+- [ ] Edit screen back navigation (the `(root)` group became a `Stack`); tab bar without the Assistant tab in a release build
+- [ ] The look of the new rows/sheets (Change password, Delete account, Privacy policy, budget scope pills, per-category budget rows)
+- [ ] Physical phone over LAN (firewall rule) and `adb reverse` variant
+- [ ] **Revoke the old Gemini key** in Google AI Studio (it shipped in old bundles)
+
 ## Phase / status
 
 - **Phase 1 (mobile restructure): done** (previous session, merged into `main` as a fast-forward).
 - **Phase 2 (Go API incl. own auth): done for MVP scope.** All 33 operations in `api/openapi.yaml` are implemented in `apps/api` and
   tested against real Postgres. Not built: transfers, password reset / email verification, worker jobs, per-user AI rate limit,
   idempotency keys, real providers (all blocked on OPEN items or post-MVP, see below).
-- **Mobile still uses Clerk + Supabase + client-side Gemini.** Untouched this session; Phase 4 repoints it.
+- **Phase 4 (repoint mobile + drop Clerk/Supabase): done** (branch `feat/mobile-go-wiring`, ran before web: D-31). Emulator pass pending (Phase 5).
 - **Next: Phase 3, the Next.js web app** (see "Next session" below).
 
-## Done (this session, branch `feat/go-api`)
+## Done (Go API session, branch `feat/go-api`, merged)
 
 | Commit | What |
 | --- | --- |
@@ -77,8 +119,8 @@ Every commit from `575f876` on was checked out in a temporary worktree and passe
 1. **Ask the owner first:** D-OPEN-6 (web token transport: (a) httpOnly cookies from the API, (b) in-memory access + httpOnly refresh cookie,
    (c) Next.js BFF). (a)/(b) need API changes (cookie variants of register/login/refresh, CSRF, CORS with credentials) **before** the web build.
    Also the UI kit + charts library (D-OPEN-10) and D-OPEN-5 (hosting) if deployment matters yet.
-2. `packages/api-client`: generate types with **openapi-typescript** + client with **openapi-fetch** (decided) from `api/openapi.yaml`;
-   add `formatMinor` / `parseMoneyInput` money helpers. Ask before adding the two packages to package.json (decided, but list the versions).
+2. `packages/api-client` **exists** (openapi-typescript 7.13 + openapi-fetch 0.17, money helpers, session core). Reuse it from `apps/web`;
+   if D-OPEN-6 picks bearer tokens, plug an in-memory/cookie storage into `createSession`; if cookies/BFF, only the typed client is reused.
 3. Scaffold `apps/web` (Next.js App Router) per `docs/WEB_APP.md`, screens from `docs/MOBILE_SCREENS.md`, against the local API (`docs/RUN_API_LOCALLY.md`).
 4. Review the "decided by default" items below.
 
@@ -88,7 +130,8 @@ Every commit from `575f876` on was checked out in a temporary worktree and passe
 - **Worker** (D-OPEN-9 job library): budget alerts, weekly tips, balance reconcile; the budget-check enqueue TODO is in `server_transactions.go`.
 - **Email** (D-OPEN-2, launch blocker): password reset, email verification, `auth_tokens` migration, unsubscribe endpoint.
 - **Hardening:** per-user AI rate limit, `Idempotency-Key`, rate-limit storage for >1 instance (Q-10), DB roles `arth_migrator`/`arth_app`, X-Forwarded-For once a proxy exists.
-- **Phase 4 (repoint mobile):** `docs/MIGRATION.md` (every legacy call now maps to an implemented endpoint or a "not built" reason).
+- **Phase 5 (emulator testing):** `docs/PREVIEW_LOCALLY.md` §7 checklist on a device; then EAS dev build.
+- **Delete `legacy/`** once the worker jobs are ported (nothing imports it).
 
 ## Decisions to review (decided by default this session)
 
@@ -108,5 +151,13 @@ See `docs/DECISIONS.md`: AUTH Q-1 (Argon2id params), Q-2, Q-4, Q-6, Q-7, Q-8, Q-
 7. 405 responses carry no `Allow` header (chi limitation with a custom handler).
 8. Category names, emoji and colours in `00002_seed_categories.sql` are copied from Welth (MIGRATION.md §7, licence D-OPEN-11).
 9. A GitHub remote `origin` now exists although DECISIONS D-13 says git is local only; nothing was pushed. Update D-13 when you decide.
-10. Earlier mobile problems still apply (`nodeLinker: hoisted`, Welth artwork, INR-only TransactionRow, sign-in second-factor dead end, …);
-    see the previous version of this file in git (`git show 9b265e5:docs/PROGRESS.md`).
+10. Mobile (after the repoint), still open: `nodeLinker: hoisted` required; Welth artwork; the biometric switch is UI only; avatars
+    unavailable (storage OPEN); unused `react-native-linear-gradient` (MIGRATION §6.13). **Fixed by the repoint:** INR-only TransactionRow,
+    sign-in second-factor dead end, client AI key, non-atomic balance writes, float money, `toISOString()` date drift, starting balance as
+    income, every screen loading every transaction, the two hook-dependency lint warnings.
+11. Behaviour changes to know (MOBILE_SCREENS §12): search matches descriptions only (server `q`), export ignores the type filter and
+    search, new accounts always use the user's currency (no picker; multi-currency is post-MVP), budget currency follows D-26.
+12. A refresh that fails on the network keeps the session (D-32); a user who is offline at start sees the "Can't reach the server" retry
+    screen rather than the sign-in screen.
+13. The API's in-memory rate limits are easy to hit while developing (register 5/h, login 20/15 min per IP). Restart `pnpm dev:api`.
+14. The Node check scripts need Node ≥ 22.18 (type stripping) although `package.json` engines say ≥ 20.19.4.
