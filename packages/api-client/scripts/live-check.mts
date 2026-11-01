@@ -143,6 +143,21 @@ const daily = await unwrap(api.GET("/v1/reports/daily", { params: { query: { fro
 assert.equal(daily.data.length, 1);
 step(`transactions: 2 keyset pages (no overlap) → q=coffee 2 rows → PATCH 9999 + clear description → DELETE restores balance (+9999) → daily report expense ${daily.data[0].expense_minor}`);
 
+// Budgets: overall + per category, progress computed by the server.
+const budgetInput = parseMoneyInput("60,000", "INR");
+assert.ok(budgetInput.ok && budgetInput.minor === 6000000);
+const overall = await unwrap(api.PUT("/v1/budgets/overall", { body: { amount_minor: budgetInput.minor } }));
+assert.equal(overall.category_id, null);
+await unwrap(api.PUT("/v1/budgets/categories/{category_id}", { params: { path: { category_id: cats.data[0].id } }, body: { amount_minor: 100000 } }));
+const budgets = await unwrap(api.GET("/v1/budgets"));
+assert.equal(budgets.data[0].category_id, null);
+const catBudget = budgets.data.find((b) => b.category_id === cats.data[0].id)!;
+assert.equal(catBudget.remaining_minor, catBudget.amount_minor - catBudget.spent_minor);
+await unwrap(api.DELETE("/v1/budgets/categories/{category_id}", { params: { path: { category_id: cats.data[0].id } } }));
+await unwrap(api.DELETE("/v1/budgets/categories/{category_id}", { params: { path: { category_id: cats.data[0].id } } }));
+assert.equal((await unwrap(api.GET("/v1/budgets"))).data.length, 1);
+step(`budgets: PUT overall 200 + category 200 → list overall first, category spent ${catBudget.spent_minor} / ${catBudget.amount_minor} (${catBudget.percent_used}%) → DELETE 204 twice (idempotent)`);
+
 try {
   await unwrap(api.PATCH("/v1/me", { body: { currency: "USD" } }));
   assert.fail("currency change after transactions must fail");

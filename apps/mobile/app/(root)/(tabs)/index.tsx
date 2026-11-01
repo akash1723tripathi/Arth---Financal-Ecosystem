@@ -2,7 +2,7 @@ import { BudgetModal } from "@/components/BudgetModal";
 import { LegacyTransactionRow as TransactionRow } from "@/components/legacy/LegacyTransactionRow";
 import { getCategoryConfig } from "@/constants/categories";
 import { useAccountsQuery } from "@/hooks/queries/useAccountsQuery";
-import { useBudgetQuery } from "@/hooks/queries/useBudgetQuery";
+import { useLegacyBudgetQuery as useBudgetQuery } from "@/hooks/legacy/useLegacyBudgetQuery";
 import { useLegacyTransactionsQuery as useTransactionsQuery } from "@/hooks/legacy/useLegacyTransactionsQuery";
 import { Transaction } from "@/lib/services/transactions";
 import { formatPrice } from "@/lib/utils";
@@ -355,7 +355,6 @@ export default function HomeScreen() {
       {user && (
         <BudgetModal
           visible={budgetModalOpen}
-          budget={budget}
           onClose={() => setBudgetModalOpen(false)}
           onSaved={() => setBudgetModalOpen(false)}
         />

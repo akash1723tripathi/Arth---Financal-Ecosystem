@@ -11,7 +11,7 @@ Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). St
 | 2 | `/v1/me` + onboarding | Done |
 | 3 | Accounts + categories | Done |
 | 4 | Transactions | Done |
-| 5 | Budgets | Not started |
+| 5 | Budgets | Done (progress shown on Home in step 6) |
 | 6 | Dashboard + reports | Not started |
 | 7 | CSV export | Not started |
 | 8 | Account deletion + privacy link | Not started |
