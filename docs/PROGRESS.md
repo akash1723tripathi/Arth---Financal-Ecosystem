@@ -10,7 +10,7 @@ Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). St
 | 1 | Own auth screens, secure-store tokens, session restore, logout / logout-all / change password, 401 handling | Done |
 | 2 | `/v1/me` + onboarding | Done |
 | 3 | Accounts + categories | Done |
-| 4 | Transactions | Not started |
+| 4 | Transactions | Done |
 | 5 | Budgets | Not started |
 | 6 | Dashboard + reports | Not started |
 | 7 | CSV export | Not started |

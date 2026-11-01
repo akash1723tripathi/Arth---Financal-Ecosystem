@@ -117,6 +117,32 @@ try {
 await unwrap(api.DELETE("/v1/accounts/{id}", { params: { path: { id: hdfc.id }, query: { cascade: true } } }));
 step("accounts: create 201 (INR) → PATCH 200 → make-default 200 (one default) → delete default 409 default_account → delete 409 account_has_transactions (transaction_count 1) → cascade 204; categories 21");
 
+// Transactions: keyset pages, filters, edit, delete (balances move server-side).
+const cash = accounts.data[0].id;
+const today = new Date().toISOString().slice(0, 10);
+for (const [amount, description] of [[1000, "coffee beans"], [2000, "Coffee shop"], [3000, "train"]] as const) {
+  await unwrap(api.POST("/v1/transactions", { body: { account_id: cash, category_id: cats.data[0].id, type: "EXPENSE", amount_minor: amount, occurred_on: today, description } }));
+}
+const page1 = await unwrap(api.GET("/v1/transactions", { params: { query: { limit: 2 } } }));
+assert.equal(page1.data.length, 2);
+assert.ok(page1.next_cursor);
+const page2 = await unwrap(api.GET("/v1/transactions", { params: { query: { limit: 2, cursor: page1.next_cursor! } } }));
+assert.equal(page2.data.length, 2);
+assert.equal(new Set([...page1.data, ...page2.data].map((t) => t.id)).size, 4);
+const coffee = await unwrap(api.GET("/v1/transactions", { params: { query: { q: "coffee", type: "EXPENSE" } } }));
+assert.equal(coffee.data.length, 2);
+const target = coffee.data[0];
+const patched = await unwrap(api.PATCH("/v1/transactions/{id}", { params: { path: { id: target.id } }, body: { amount_minor: 9999, description: "" } }));
+assert.equal(patched.transaction.amount_minor, 9999);
+assert.equal(patched.transaction.description, null);
+const before = (await unwrap(api.GET("/v1/accounts/{id}", { params: { path: { id: cash } } }))).balance_minor;
+await unwrap(api.DELETE("/v1/transactions/{id}", { params: { path: { id: target.id } } }));
+const after = (await unwrap(api.GET("/v1/accounts/{id}", { params: { path: { id: cash } } }))).balance_minor;
+assert.equal(after - before, 9999);
+const daily = await unwrap(api.GET("/v1/reports/daily", { params: { query: { from: today, to: today } } }));
+assert.equal(daily.data.length, 1);
+step(`transactions: 2 keyset pages (no overlap) → q=coffee 2 rows → PATCH 9999 + clear description → DELETE restores balance (+9999) → daily report expense ${daily.data[0].expense_minor}`);
+
 try {
   await unwrap(api.PATCH("/v1/me", { body: { currency: "USD" } }));
   assert.fail("currency change after transactions must fail");

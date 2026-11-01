@@ -1,5 +1,5 @@
 import { useBudgetQuery } from "@/hooks/queries/useBudgetQuery";
-import { useTransactionsQuery } from "@/hooks/queries/useTransactionsQuery";
+import { useLegacyTransactionsQuery as useTransactionsQuery } from "@/hooks/legacy/useLegacyTransactionsQuery";
 import { askAssistant } from "@/lib/services/assistant";
 import { useUserStore } from "@/store/userStore";
 import { useUser } from "@clerk/expo";

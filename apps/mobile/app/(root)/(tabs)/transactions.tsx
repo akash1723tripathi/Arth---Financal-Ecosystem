@@ -1,12 +1,13 @@
+import type { Transaction } from "@arth/api-client";
 import { TransactionRow } from "@/components/TransactionRow";
 import { useAccountsQuery } from "@/hooks/queries/useAccountsQuery";
-import { useTransactionsQuery } from "@/hooks/queries/useTransactionsQuery";
+import { useDailyReportQuery } from "@/hooks/queries/useReportsQuery";
+import { useTransactionsInfiniteQuery } from "@/hooks/queries/useTransactionsQuery";
 import { useDeleteTransaction } from "@/hooks/mutations/useTransactionMutations";
-import { Transaction, TransactionType } from "@/lib/services/transactions";
-import { exportTransactionsToCsv } from "@/lib/utils/exportTransactions";
+import { describeError } from "@/lib/api/errors";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -18,21 +19,20 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { eachDayOfInterval, format, startOfDay, startOfMonth } from "date-fns";
+import { format, parse, startOfMonth } from "date-fns";
 import { BarChart } from "react-native-gifted-charts";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const FILTERS = ["All", "Income", "Expense"] as const;
 
-function dayKey(date: Date) {
-  return format(date, "yyyy-MM-dd");
-}
-
-function currentMonthDays() {
-  const today = startOfDay(new Date());
-  return eachDayOfInterval({ start: startOfMonth(today), end: today }).map(
-    (d) => ({ key: dayKey(d), label: format(d, "d MMM") })
-  );
+/** Debounce the search box so the server-side `q` filter isn't hit on every keystroke. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
 }
 
 export default function TransactionsScreen() {
@@ -43,8 +43,9 @@ export default function TransactionsScreen() {
   const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
+  const q = useDebounced(search.trim(), 300);
 
-  const typeFilter: TransactionType | null =
+  const typeFilter: "INCOME" | "EXPENSE" | null =
     activeFilter === "Income"
       ? "INCOME"
       : activeFilter === "Expense"
@@ -52,65 +53,58 @@ export default function TransactionsScreen() {
       : null;
 
   const {
-    data: transactions = [],
+    data,
     isLoading: transactionsLoading,
     isRefetching: transactionsRefetching,
     isError: transactionsError,
     refetch: refetchTransactions,
-  } = useTransactionsQuery({ type: typeFilter, accountId: activeAccountId });
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useTransactionsInfiniteQuery({ type: typeFilter, accountId: activeAccountId, q });
   const { data: accounts = [], refetch: refetchAccounts } = useAccountsQuery();
   const { mutateAsync: removeTransaction } = useDeleteTransaction();
 
+  const transactions = useMemo(
+    () => data?.pages.flatMap((page) => page.data) ?? [],
+    [data]
+  );
+
+  // Chart: this month (1st → today), server-side daily totals for the selected account.
+  const today = new Date();
+  const from = format(startOfMonth(today), "yyyy-MM-dd");
+  const to = format(today, "yyyy-MM-dd");
+  const { data: daily = [], refetch: refetchDaily } = useDailyReportQuery(from, to, activeAccountId);
+
   const loading = transactionsLoading;
-  const refreshing = transactionsRefetching;
+  const refreshing = transactionsRefetching && !isFetchingNextPage;
   const error = transactionsError;
 
   const loadData = () => {
     refetchTransactions();
     refetchAccounts();
+    refetchDaily();
   };
 
-  const filteredTransactions = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return transactions;
-    return transactions.filter(
-      (tx) =>
-        tx.description?.toLowerCase().includes(q) ||
-        tx.category.toLowerCase().includes(q)
-    );
-  }, [transactions, search]);
-
-  const dailyIncomeExpense = useMemo(() => {
-    const days = currentMonthDays();
-    return days.flatMap(({ key, label }) => {
-      const income = transactions
-        .filter(
-          (tx) => tx.type === "INCOME" && dayKey(new Date(tx.date)) === key
-        )
-        .reduce((sum, tx) => sum + tx.amount, 0);
-      const expense = transactions
-        .filter(
-          (tx) => tx.type === "EXPENSE" && dayKey(new Date(tx.date)) === key
-        )
-        .reduce((sum, tx) => sum + tx.amount, 0);
-      return [
-        { value: income, label, frontColor: "#3DDC84" },
-        { value: expense, frontColor: "#FF6B4A" },
-      ];
-    });
-  }, [transactions]);
+  // Bar heights are minor units straight from the API (display only). The type filter hides the other series.
+  const dailyIncomeExpense = useMemo(
+    () =>
+      daily.flatMap((d) => [
+        {
+          value: typeFilter === "EXPENSE" ? 0 : d.income_minor,
+          label: format(parse(d.date, "yyyy-MM-dd", new Date()), "d MMM"),
+          frontColor: "#3DDC84",
+        },
+        { value: typeFilter === "INCOME" ? 0 : d.expense_minor, frontColor: "#FF6B4A" },
+      ]),
+    [daily, typeFilter]
+  );
 
   const handleExport = async () => {
     if (exporting) return;
     setExporting(true);
     try {
-      const { count } = await exportTransactionsToCsv(transactions);
-      if (count === 0) {
-        Alert.alert("Nothing to export", "No transactions in the export window.");
-      }
-    } catch (err) {
-      console.error("Export failed:", err);
-      Alert.alert("Error", "Couldn't export transactions.");
+      Alert.alert("Export", "CSV export moves to the server in the next step.");
     } finally {
       setExporting(false);
     }
@@ -126,15 +120,19 @@ export default function TransactionsScreen() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
-            const { error: deleteError } = await removeTransaction(tx);
-            if (deleteError) {
-              Alert.alert("Error", "Couldn't delete this transaction.");
+            try {
+              await removeTransaction(tx.id);
+            } catch (err) {
+              Alert.alert("Error", describeError(err, "Couldn't delete this transaction."));
             }
           },
         },
       ]
     );
   };
+
+  const isTransfer = (tx: Transaction) =>
+    tx.type === "TRANSFER_IN" || tx.type === "TRANSFER_OUT";
 
   return (
     <SafeAreaView className="flex-1 bg-brand-body" edges={["top"]}>
@@ -260,16 +258,39 @@ export default function TransactionsScreen() {
         </View>
       ) : (
         <FlatList
-          data={filteredTransactions}
+          data={transactions}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
-            <TransactionRow tx={item} onDelete={() => handleDelete(item)} />
+            <TransactionRow
+              tx={item}
+              onPress={
+                isTransfer(item)
+                  ? undefined
+                  : () =>
+                      router.push({
+                        pathname: "/(root)/transaction/[id]",
+                        params: { id: item.id },
+                      })
+              }
+              onDelete={() => handleDelete(item)}
+            />
           )}
           contentContainerStyle={{
             paddingHorizontal: 20,
             paddingTop: 8,
             paddingBottom: 100,
           }}
+          onEndReachedThreshold={0.4}
+          onEndReached={() => {
+            if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+          }}
+          ListFooterComponent={
+            isFetchingNextPage ? (
+              <View className="py-4 items-center">
+                <ActivityIndicator color="#4A9EFF" />
+              </View>
+            ) : null
+          }
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={loadData} />
           }

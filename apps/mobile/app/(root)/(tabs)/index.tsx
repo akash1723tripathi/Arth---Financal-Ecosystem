@@ -1,9 +1,9 @@
 import { BudgetModal } from "@/components/BudgetModal";
-import { TransactionRow } from "@/components/TransactionRow";
+import { LegacyTransactionRow as TransactionRow } from "@/components/legacy/LegacyTransactionRow";
 import { getCategoryConfig } from "@/constants/categories";
 import { useAccountsQuery } from "@/hooks/queries/useAccountsQuery";
 import { useBudgetQuery } from "@/hooks/queries/useBudgetQuery";
-import { useTransactionsQuery } from "@/hooks/queries/useTransactionsQuery";
+import { useLegacyTransactionsQuery as useTransactionsQuery } from "@/hooks/legacy/useLegacyTransactionsQuery";
 import { Transaction } from "@/lib/services/transactions";
 import { formatPrice } from "@/lib/utils";
 import { formatMinor } from "@/lib/money";

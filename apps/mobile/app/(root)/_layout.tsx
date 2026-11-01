@@ -5,7 +5,7 @@ import { describeError } from "@/lib/api/errors";
 import { API_URL, BACKEND } from "@/lib/config";
 import { useUserStore } from "@/store/userStore";
 import { Feather } from "@expo/vector-icons";
-import { Redirect, Slot, usePathname } from "expo-router";
+import { Redirect, Slot, Stack, usePathname } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 
@@ -64,7 +64,8 @@ function RootGroupLayout() {
     return <Redirect href="/(root)/onboarding" />;
   }
 
-  return <Slot />;
+  // A stack so pushed screens (edit transaction) get back navigation over the tabs.
+  return <Stack screenOptions={{ headerShown: false }} />;
 }
 
 // LEGACY (EXPO_PUBLIC_BACKEND=supabase): Clerk gate + useUserSync. Removed with Clerk.
