@@ -269,7 +269,15 @@ step("POST /v1/auth/logout-all → 204; another device's token → 401");
 
 // Clean up: log in again and delete the throwaway user.
 await session.start(await login2());
+try {
+  await unwrap(api.DELETE("/v1/me", { body: { password: "definitely-wrong-pw" } }));
+  assert.fail("delete with a wrong password must fail");
+} catch (e) {
+  assert.ok(isApiError(e, "invalid_credentials"), String(e));
+}
 await unwrap(api.DELETE("/v1/me", { body: { password: currentPassword } }));
-step("DELETE /v1/me → 204 (throwaway user removed)");
+const gone = await fetch(`${BASE}/v1/me`, { headers: { Authorization: `Bearer ${session.peekAccessToken()}` } });
+assert.equal(gone.status, 401);
+step("DELETE /v1/me wrong password → 401 invalid_credentials; right password → 204, token → 401 (throwaway user removed)");
 
 console.log("\nlive check passed");

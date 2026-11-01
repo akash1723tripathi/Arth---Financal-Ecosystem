@@ -1,5 +1,7 @@
 import { AccountModal } from "@/components/AccountModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
+import { DeleteAccountModal } from "@/components/DeleteAccountModal";
+import { PRIVACY_POLICY_URL } from "@/lib/config";
 import { CurrencyPicker } from "@/components/CurrencyPicker";
 import { useSetDefaultAccount } from "@/hooks/mutations/useAccountMutations";
 import { useLogout, useLogoutAll } from "@/hooks/mutations/useAuthMutations";
@@ -15,6 +17,7 @@ import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   ScrollView,
   Switch,
   Text,
@@ -91,6 +94,7 @@ export default function ProfileScreen() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [currencyPickerOpen, setCurrencyPickerOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
 
   const {
     data: accounts = [],
@@ -114,6 +118,15 @@ export default function ProfileScreen() {
         onPress: () => logout(),
       },
     ]);
+  };
+
+  const openPrivacyPolicy = () => {
+    if (PRIVACY_POLICY_URL) {
+      Linking.openURL(PRIVACY_POLICY_URL);
+    } else {
+      // Placeholder until the policy is published (needed for the Play listing, D-OPEN-11).
+      Alert.alert("Privacy policy", "Our privacy policy will be published here before launch.");
+    }
   };
 
   const handleSignOutAll = () => {
@@ -282,6 +295,19 @@ export default function ProfileScreen() {
             showChevron={false}
             danger
           />
+          <Row
+            icon="trash-2"
+            label="Delete account"
+            onPress={() => setDeleteAccountOpen(true)}
+            showChevron={false}
+            danger
+          />
+        </View>
+
+        {/* About */}
+        <SectionLabel>About</SectionLabel>
+        <View className="mx-5 rounded-2xl overflow-hidden border border-[#E8E6DF]">
+          <Row icon="file-text" label="Privacy policy" onPress={openPrivacyPolicy} />
         </View>
       </ScrollView>
 
@@ -295,6 +321,11 @@ export default function ProfileScreen() {
           onMadeDefault={handleMadeDefault}
         />
       )}
+
+      <DeleteAccountModal
+        visible={deleteAccountOpen}
+        onClose={() => setDeleteAccountOpen(false)}
+      />
 
       <ChangePasswordModal
         visible={changePasswordOpen}

@@ -68,3 +68,13 @@ export function useChangePassword() {
       ),
   });
 }
+
+/** DELETE /v1/me {password}: deletes the user and all their data on the server, then clears the session. */
+export function useDeleteAccount() {
+  return useMutation({
+    mutationFn: async (password: string) => {
+      await unwrap(api.DELETE("/v1/me", { body: { password } }));
+      await session.end();
+    },
+  });
+}

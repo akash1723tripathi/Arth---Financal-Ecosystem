@@ -14,7 +14,7 @@ Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). St
 | 5 | Budgets | Done (progress shown on Home in step 6) |
 | 6 | Dashboard + reports | Done (daily report landed with step 4) |
 | 7 | CSV export | Done |
-| 8 | Account deletion + privacy link | Not started |
+| 8 | Account deletion + privacy link | Done |
 | 9 | Receipt scan (server); voice + assistant hidden in release | Not started |
 | 10 | Remove Clerk, Supabase, client Gemini, `EXPO_PUBLIC_BACKEND` | Not started |
 | 11 | Local preview tooling (`dev:*`, seed, `docs/PREVIEW_LOCALLY.md`) | Done (kept in sync with later steps) |
