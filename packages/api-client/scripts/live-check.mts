@@ -175,6 +175,24 @@ assert.match(csv.response.headers.get("Content-Disposition") ?? "", /filename="a
 assert.ok(typeof csv.data === "string" && csv.data.includes("450.50"));
 step(`export: 200 text/csv, ${String(csv.data).trim().split("\n").length - 1} rows, contains "450.50", ${csv.response.headers.get("Content-Disposition")}`);
 
+// Receipt scan: multipart upload through the authed client, the same way the app sends it (fake AI driver).
+const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+const form = new FormData();
+form.append("file", new Blob([png], { type: "image/png" }), "receipt.png");
+const extraction = await unwrap(
+  api.POST("/v1/ai/receipt-extractions", { body: form as unknown as { file: string }, bodySerializer: (b) => b as unknown as FormData }),
+);
+assert.equal(typeof extraction.currency, "string");
+const textForm = new FormData();
+textForm.append("file", new Blob(["not an image"], { type: "text/plain" }), "x.txt");
+try {
+  await unwrap(api.POST("/v1/ai/receipt-extractions", { body: textForm as unknown as { file: string }, bodySerializer: (b) => b as unknown as FormData }));
+  assert.fail("a text file must be refused");
+} catch (e) {
+  assert.ok(isApiError(e, "unsupported_media_type"), String(e));
+}
+step(`receipt scan: 200 draft (type ${extraction.type}, amount_minor ${extraction.amount_minor} ${extraction.currency}, category ${extraction.category_key}); text/plain → 415`);
+
 try {
   await unwrap(api.PATCH("/v1/me", { body: { currency: "USD" } }));
   assert.fail("currency change after transactions must fail");

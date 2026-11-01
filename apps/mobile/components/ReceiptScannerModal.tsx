@@ -14,7 +14,7 @@ export function ReceiptScannerModal({
 }: {
   visible: boolean;
   onClose: () => void;
-  onCaptured: (base64: string, mimeType: string) => void;
+  onCaptured: (uri: string, mimeType: string) => void;
 }) {
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -29,10 +29,9 @@ export function ReceiptScannerModal({
     setCapturing(true);
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
         quality: 0.6,
       });
-      if (photo?.base64) onCaptured(photo.base64, "image/jpeg");
+      if (photo?.uri) onCaptured(photo.uri, "image/jpeg");
     } catch (err) {
       console.error("Camera capture failed:", err);
     } finally {
@@ -48,12 +47,11 @@ export function ReceiptScannerModal({
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       quality: 0.7,
-      base64: true,
     });
     if (result.canceled) return;
 
     const asset = result.assets[0];
-    if (asset.base64) onCaptured(asset.base64, asset.mimeType ?? "image/jpeg");
+    if (asset.uri) onCaptured(asset.uri, asset.mimeType ?? "image/jpeg");
   };
 
   return (

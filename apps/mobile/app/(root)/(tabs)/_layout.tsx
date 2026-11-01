@@ -32,7 +32,7 @@ export default function TabLayout() {
           <Label>Add</Label>
         </NativeTabs.Trigger>
 
-        <NativeTabs.Trigger name="assistant">
+        <NativeTabs.Trigger name="assistant" hidden={!__DEV__}>
           <Icon sf="brain.head.profile" />
           <Label>Assistant</Label>
         </NativeTabs.Trigger>
@@ -90,6 +90,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="assistant"
         options={{
+          // No server endpoint yet (post-MVP): hidden from the tab bar in release builds.
+          href: __DEV__ ? undefined : null,
           title: "Assistant",
           tabBarIcon: ({ color, size }) => (
             <Feather name="cpu" size={size} color={color} />

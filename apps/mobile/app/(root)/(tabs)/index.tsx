@@ -37,7 +37,7 @@ const QUICK_ACTIONS = [
   },
   {
     icon: "mic",
-    label: "Voice Entry",
+    label: "Voice Entry (dev)",
     action: "voice",
     color: "#FF6B4A",
   },
@@ -48,6 +48,9 @@ const QUICK_ACTIONS = [
     color: "#3DDC84",
   },
 ] as const;
+
+// Voice entry and the assistant have no server endpoints yet: shown only in development builds.
+const VISIBLE_QUICK_ACTIONS = QUICK_ACTIONS.filter((a) => __DEV__ || a.action !== "voice");
 
 /** Bar colour from the server's percent_used: coral >= 100 %, yellow >= 80 %, green otherwise. */
 function budgetColor(b: BudgetProgress) {
@@ -163,7 +166,7 @@ export default function HomeScreen() {
           </View>
 
           <View className="flex-row gap-2.5">
-            {QUICK_ACTIONS.map((action) => (
+            {VISIBLE_QUICK_ACTIONS.map((action) => (
               <TouchableOpacity
                 key={action.label}
                 onPress={() =>
@@ -191,6 +194,7 @@ export default function HomeScreen() {
 
         {/* Light body */}
         <View className="px-5 pt-[18px] pb-5">
+          {__DEV__ && (
           <TouchableOpacity
             onPress={() => router.push("/(root)/(tabs)/assistant")}
             className="bg-white rounded-[18px] border border-[#E8E6DF] p-3.5 flex-row items-center gap-2.5 mb-[18px]"
@@ -199,10 +203,11 @@ export default function HomeScreen() {
               <View className="w-[7px] h-[7px] rounded-full bg-brand-blue" />
             </View>
             <Text className="text-brand-text-muted text-[13px] flex-1">
-              Ask AI anything about your money
+              Ask AI anything about your money · DEV only
             </Text>
             <Feather name="arrow-right" size={16} color="#4A9EFF" />
           </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             onPress={() => setBudgetModalOpen(true)}

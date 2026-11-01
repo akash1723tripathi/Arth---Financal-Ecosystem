@@ -1,4 +1,4 @@
-import type { Account, Category, EntryInputMethod, EntryType, Transaction } from "@arth/api-client";
+import type { Account, Category, EntryInputMethod, Transaction } from "@arth/api-client";
 import { AIActionCard } from "@/components/AIActionCard";
 import { CalendarPicker } from "@/components/CalendarPicker";
 import { PillGroup } from "@/components/PillGroup";
@@ -15,10 +15,7 @@ import { isApiError } from "@/lib/api/client";
 import { describeError } from "@/lib/api/errors";
 import { minorToInput, moneyInputErrorText, parseMoneyInput } from "@/lib/money";
 import { TransactionFormValues, transactionSchema } from "@/lib/schemas/transaction";
-import {
-  ExtractedTransaction,
-  extractTransactionFromReceipt,
-} from "@/lib/services/extractTransaction";
+import { ExtractionDraft, extractReceipt } from "@/lib/ai/extraction";
 import { Feather } from "@expo/vector-icons";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { format, isValid, parse } from "date-fns";
@@ -37,20 +34,13 @@ import {
   View,
 } from "react-native";
 
+/** Voice entry has no server endpoint yet: visible only in development builds, clearly marked. */
+const VOICE_ENABLED = __DEV__;
+
 const TYPE_OPTIONS = [
   { key: "EXPENSE" as const, label: "Expense" },
   { key: "INCOME" as const, label: "Income" },
 ];
-
-/** A draft from an AI extraction, normalised for the form (amount as an input string, never a float). */
-export type ExtractionDraft = {
-  type: EntryType | null;
-  amountInput: string | null;
-  categoryId: string | null;
-  description: string | null;
-  occurredOn: string | null; // yyyy-MM-dd
-  transcript: string | null;
-};
 
 function parseDay(day: string): Date | null {
   const d = parse(day, "yyyy-MM-dd", new Date());
@@ -83,18 +73,6 @@ function editDefaults(tx: Transaction): TransactionFormValues {
   };
 }
 
-// LEGACY adapter (client-side Gemini), replaced by the server receipt endpoint in the receipt-scan step.
-function legacyToDraft(result: ExtractedTransaction, categories: Category[]): ExtractionDraft {
-  return {
-    type: result.type,
-    amountInput: result.amount != null ? String(result.amount) : null,
-    categoryId: categories.find((c) => c.key === result.category)?.id ?? null,
-    description: result.description,
-    occurredOn: result.date ? result.date.slice(0, 10) : null,
-    transcript: result.transcript,
-  };
-}
-
 /**
  * The add / edit transaction form (Welth "Add transaction" screen, now on the Go API).
  * Create mode shows the AI capture cards and honours `?action=scan|voice`.
@@ -105,7 +83,7 @@ export function TransactionForm({ editing }: { editing?: Transaction }) {
   const isEdit = !!editing;
 
   const { data: accounts = [], isLoading: loadingAccounts, isError: accountsError } = useAccountsQuery();
-  const { byId: categoryById, expense, income, isLoading: loadingCategories, data: categoryList = [] } = useCategories();
+  const { byId: categoryById, expense, income, isLoading: loadingCategories } = useCategories();
   const { mutateAsync: createTransaction, isPending: creating } = useCreateTransaction();
   const { mutateAsync: updateTransaction, isPending: updating } = useUpdateTransaction();
   const saving = creating || updating;
@@ -171,27 +149,37 @@ export function TransactionForm({ editing }: { editing?: Transaction }) {
         "Review before saving",
         `Couldn't confidently read the ${missing.join(" and ")}. Please fill it in.`
       );
+    } else if (selectedAccount && draft.amountInput != null && draft.currency !== selectedAccount.currency) {
+      Alert.alert(
+        "Review before saving",
+        `The receipt is in ${draft.currency} but ${selectedAccount.name} is in ${selectedAccount.currency}. Check the amount.`
+      );
     }
   };
 
-  const handleReceiptCaptured = async (base64: string, mimeType: string) => {
+  // POST /v1/ai/receipt-extractions: the server's AI provider (fake driver in dev) returns a draft to review.
+  const handleReceiptCaptured = async (uri: string, mimeType: string) => {
     setScannerOpen(false);
     setScanning(true);
     try {
-      const extracted = await extractTransactionFromReceipt(base64, mimeType);
-      applyExtraction(legacyToDraft(extracted, categoryList));
+      applyExtraction(await extractReceipt(uri, mimeType));
       setInputMethod("RECEIPT_SCAN");
     } catch (err) {
       console.error("Receipt scan failed:", err);
-      Alert.alert("Error", "Couldn't read that receipt. Try again or enter it manually.");
+      Alert.alert(
+        "Error",
+        isApiError(err, "payload_too_large")
+          ? "That photo is too large (max 5 MB). Try again with a smaller one."
+          : describeError(err, "Couldn't read that receipt. Try again or enter it manually.")
+      );
     } finally {
       setScanning(false);
     }
   };
 
-  const handleVoiceExtracted = (result: ExtractedTransaction) => {
-    applyExtraction(legacyToDraft(result, categoryList));
-    setVoiceTranscript(result.transcript);
+  const handleVoiceExtracted = (draft: ExtractionDraft) => {
+    applyExtraction(draft);
+    setVoiceTranscript(draft.transcript);
     setInputMethod("VOICE");
   };
 
@@ -200,7 +188,7 @@ export function TransactionForm({ editing }: { editing?: Transaction }) {
     if (params.action === "scan") {
       setScannerOpen(true);
       router.setParams({ action: undefined });
-    } else if (params.action === "voice") {
+    } else if (params.action === "voice" && VOICE_ENABLED) {
       setVoiceModalOpen(true);
       router.setParams({ action: undefined });
     }
@@ -314,13 +302,23 @@ export function TransactionForm({ editing }: { editing?: Transaction }) {
                   colors={AI_GRADIENT}
                   onPress={() => setScannerOpen(true)}
                 />
-                <AIActionCard
-                  icon="mic"
-                  title="Voice log"
-                  subtitle="Just say it"
-                  colors={AI_GRADIENT_REVERSE}
-                  onPress={() => setVoiceModalOpen(true)}
-                />
+                {VOICE_ENABLED && (
+                  <AIActionCard
+                    icon="mic"
+                    title="Voice log"
+                    subtitle="DEV only · no server yet"
+                    colors={AI_GRADIENT_REVERSE}
+                    onPress={() => setVoiceModalOpen(true)}
+                  />
+                )}
+              </View>
+            )}
+
+            {__DEV__ && inputMethod === "RECEIPT_SCAN" && (
+              <View className="self-start bg-[#0E9C791A] rounded-full px-2.5 py-1 mb-3">
+                <Text className="text-[#0E9C79] text-[11px] font-medium">
+                  DEV · demo extraction (fake AI driver on the server)
+                </Text>
               </View>
             )}
 
@@ -499,11 +497,13 @@ export function TransactionForm({ editing }: { editing?: Transaction }) {
 
       {!isEdit && (
         <>
-          <VoiceRecorderModal
-            visible={voiceModalOpen}
-            onClose={() => setVoiceModalOpen(false)}
-            onExtracted={handleVoiceExtracted}
-          />
+          {VOICE_ENABLED && (
+            <VoiceRecorderModal
+              visible={voiceModalOpen}
+              onClose={() => setVoiceModalOpen(false)}
+              onExtracted={handleVoiceExtracted}
+            />
+          )}
           <ReceiptScannerModal
             visible={scannerOpen}
             onClose={() => setScannerOpen(false)}

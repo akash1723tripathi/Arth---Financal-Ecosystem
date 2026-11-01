@@ -1,8 +1,3 @@
-import { useLegacyBudgetQuery as useBudgetQuery } from "@/hooks/legacy/useLegacyBudgetQuery";
-import { useLegacyTransactionsQuery as useTransactionsQuery } from "@/hooks/legacy/useLegacyTransactionsQuery";
-import { askAssistant } from "@/lib/services/assistant";
-import { useUserStore } from "@/store/userStore";
-import { useUser } from "@clerk/expo";
 import { Feather } from "@expo/vector-icons";
 import { useState } from "react";
 import {
@@ -55,54 +50,48 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
-export default function AssistantScreen() {
-  const { user } = useUser();
-  const currency = useUserStore((s) => s.currency);
-  const { refetch: refetchTransactions } = useTransactionsQuery();
-  const { refetch: refetchBudget } = useBudgetQuery();
+/**
+ * The AI assistant has no server endpoint yet (post-MVP; LLM provider D-OPEN-1, `POST /v1/assistant/messages`
+ * is not in the spec). The tab is hidden in release builds; in development builds the chat UI stays visible,
+ * clearly marked, and answers with a placeholder. No client-side AI key, no data leaves the app.
+ */
+const DEV_REPLY =
+  "DEV preview: the assistant isn't connected yet. It needs a server endpoint (post-MVP), so this tab is hidden in release builds.";
 
+export default function AssistantScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
+  const sending = false;
 
-  const sendMessage = async (text: string) => {
-    if (!text.trim() || sending || !user) return;
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content: text,
-    };
-    setMessages((prev) => [...prev, userMsg]);
+  const sendMessage = (text: string) => {
+    if (!text.trim()) return;
+    const now = Date.now();
+    setMessages((prev) => [
+      ...prev,
+      { id: `${now}`, role: "user", content: text },
+      { id: `${now + 1}`, role: "assistant", content: DEV_REPLY },
+    ]);
     setInput("");
-    setSending(true);
-
-    try {
-      const [{ data: transactions = [] }, { data: budget = null }] =
-        await Promise.all([refetchTransactions(), refetchBudget()]);
-      const reply = await askAssistant(text, transactions, budget, currency);
-      setMessages((prev) => [
-        ...prev,
-        { id: (Date.now() + 1).toString(), role: "assistant", content: reply },
-      ]);
-    } catch (err) {
-      console.error("Assistant error:", err);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: "Sorry, something went wrong answering that. Try again.",
-        },
-      ]);
-    } finally {
-      setSending(false);
-    }
   };
+
+  if (!__DEV__) {
+    return (
+      <SafeAreaView className="flex-1 bg-brand-body items-center justify-center px-10" edges={["top"]}>
+        <Feather name="cpu" size={32} color="#BDC3C7" />
+        <Text className="text-brand-text-muted text-sm mt-3 text-center">
+          The assistant is coming soon.
+        </Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView className="flex-1 bg-brand-body" edges={["top"]}>
       <View className="px-5 pt-3 pb-2">
         <Text className="text-brand-bg text-xl font-semibold">Assistant</Text>
+        <Text className="text-brand-coral text-[11px] mt-0.5">
+          DEV ONLY · not connected (no server endpoint yet)
+        </Text>
       </View>
 
       <KeyboardAvoidingView
