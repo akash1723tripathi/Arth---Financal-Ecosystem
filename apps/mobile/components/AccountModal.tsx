@@ -3,7 +3,9 @@ import {
   useDeleteAccount,
   useUpdateAccount,
 } from "@/hooks/mutations/useAccountMutations";
-import { Account, AccountType } from "@/lib/services/accounts";
+import type { Account, AccountType } from "@arth/api-client";
+import { isApiError } from "@/lib/api/client";
+import { describeError } from "@/lib/api/errors";
 import { COLORS } from "@/constants/theme";
 import { FormSheetModal } from "@/components/FormSheetModal";
 import { useEffect, useState } from "react";
@@ -65,8 +67,8 @@ export function AccountModal({
         await createAccount({ name: name.trim(), type });
       }
       onSaved();
-    } catch {
-      setError("Something went wrong. Please try again.");
+    } catch (err) {
+      setError(describeError(err));
     }
   };
 
@@ -100,8 +102,13 @@ export function AccountModal({
           },
         ]
       );
-    } catch {
-      Alert.alert("Error", "Couldn't check the account's transactions.");
+    } catch (err) {
+      Alert.alert(
+        "Error",
+        isApiError(err, "default_account")
+          ? "You can't delete your default account. Make another account the default first."
+          : describeError(err, "Couldn't delete the account.")
+      );
     }
   };
 

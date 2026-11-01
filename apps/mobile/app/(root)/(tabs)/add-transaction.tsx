@@ -15,7 +15,7 @@ import {
   TransactionFormValues,
   transactionSchema,
 } from "@/lib/schemas/transaction";
-import { Account } from "@/lib/services/accounts";
+import type { Account } from "@arth/api-client";
 import {
   ExtractedTransaction,
   extractTransactionFromReceipt,

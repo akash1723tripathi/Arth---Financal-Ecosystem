@@ -7,8 +7,8 @@ import { useAccountsQuery } from "@/hooks/queries/useAccountsQuery";
 import { useMeQuery, useUserCurrency } from "@/hooks/queries/useMeQuery";
 import { useUpdateMe } from "@/hooks/mutations/useMeMutations";
 import { isApiError } from "@/lib/api/client";
-import { Account, AccountType } from "@/lib/services/accounts";
-import { formatPrice } from "@/lib/utils";
+import type { Account, AccountType } from "@arth/api-client";
+import { formatMinor } from "@/lib/money";
 import { describeError } from "@/lib/api/errors";
 import { Feather } from "@expo/vector-icons";
 import { useState } from "react";
@@ -223,7 +223,7 @@ export default function ProfileScreen() {
                 key={account.id}
                 icon={ACCOUNT_ICON[account.type]}
                 label={account.name + (account.is_default ? " (default)" : "")}
-                value={formatPrice(account.balance, currency)}
+                value={formatMinor(account.balance_minor, account.currency)}
                 onPress={() => {
                   setEditingAccount(account);
                   setModalVisible(true);

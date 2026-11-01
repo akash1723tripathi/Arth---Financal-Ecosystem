@@ -1,16 +1,14 @@
-import { useSupabase } from "@/hooks/useSupabase";
+import { api, unwrap } from "@/lib/api/client";
 import { queryKeys } from "@/lib/query/keys";
-import { getAccounts } from "@/lib/services/accounts";
-import { useUser } from "@clerk/expo";
+import { useAuthStore } from "@/store/authStore";
 import { useQuery } from "@tanstack/react-query";
 
+/** GET /v1/accounts: default account first, then by creation time. */
 export function useAccountsQuery() {
-  const { user } = useUser();
-  const supabase = useSupabase();
-
+  const signedIn = useAuthStore((s) => s.status === "signedIn");
   return useQuery({
-    queryKey: queryKeys.accounts(user?.id),
-    queryFn: () => getAccounts(supabase, user!.id),
-    enabled: !!user,
+    queryKey: queryKeys.accountList,
+    queryFn: async () => (await unwrap(api.GET("/v1/accounts"))).data,
+    enabled: signedIn,
   });
 }

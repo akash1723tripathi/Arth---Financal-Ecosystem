@@ -6,6 +6,7 @@ import { useBudgetQuery } from "@/hooks/queries/useBudgetQuery";
 import { useTransactionsQuery } from "@/hooks/queries/useTransactionsQuery";
 import { Transaction } from "@/lib/services/transactions";
 import { formatPrice } from "@/lib/utils";
+import { formatMinor } from "@/lib/money";
 import { useUserStore } from "@/store/userStore";
 import { useUser } from "@clerk/expo";
 import { Feather } from "@expo/vector-icons";
@@ -83,7 +84,8 @@ export default function HomeScreen() {
   };
 
   const totalBalance = useMemo(
-    () => accounts.reduce((sum, account) => sum + account.balance, 0),
+    // Integer minor units; replaced by the server's total in GET /v1/dashboard.
+    () => accounts.reduce((sum, account) => sum + account.balance_minor, 0),
     [accounts]
   );
 
@@ -177,7 +179,7 @@ export default function HomeScreen() {
               Total balance
             </Text>
             <Text className="text-brand-text-primary text-[38px] font-medium tracking-tight">
-              {formatPrice(totalBalance, currency)}
+              {formatMinor(totalBalance, currency)}
             </Text>
             <View className="flex-row gap-3.5 mt-2.5">
               <View className="flex-row items-center gap-1.5">

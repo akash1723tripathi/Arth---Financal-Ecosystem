@@ -85,6 +85,38 @@ assert.equal(created.transaction.amount_minor, 45050);
 assert.equal(created.account.balance_minor, 500000 - 45050);
 step(`"450.50" → amount_minor ${created.transaction.amount_minor}, balance ${created.account.balance_minor}`);
 
+// Accounts: create → edit → make default → two-step delete.
+const allCats = await unwrap(api.GET("/v1/categories"));
+assert.equal(allCats.data.length, 21);
+const hdfc = await unwrap(api.POST("/v1/accounts", { body: { name: "HDFC", type: "BANK" } }));
+assert.equal(hdfc.currency, "INR");
+const edited = await unwrap(api.PATCH("/v1/accounts/{id}", { params: { path: { id: hdfc.id } }, body: { name: "HDFC Savings", type: "SAVINGS" } }));
+assert.equal(edited.name, "HDFC Savings");
+await unwrap(api.POST("/v1/transactions", {
+  body: { account_id: hdfc.id, category_id: cats.data[1].id, type: "EXPENSE", amount_minor: 100, occurred_on: new Date().toISOString().slice(0, 10) },
+}));
+const madeDefault = await unwrap(api.POST("/v1/accounts/{id}/make-default", { params: { path: { id: hdfc.id } } }));
+assert.equal(madeDefault.is_default, true);
+const list = await unwrap(api.GET("/v1/accounts"));
+assert.equal(list.data[0].id, hdfc.id);
+assert.equal(list.data.filter((a) => a.is_default).length, 1);
+try {
+  await unwrap(api.DELETE("/v1/accounts/{id}", { params: { path: { id: hdfc.id } } }));
+  assert.fail("deleting the default account must fail");
+} catch (e) {
+  assert.ok(isApiError(e, "default_account"), String(e));
+}
+await unwrap(api.POST("/v1/accounts/{id}/make-default", { params: { path: { id: accounts.data[0].id } } }));
+try {
+  await unwrap(api.DELETE("/v1/accounts/{id}", { params: { path: { id: hdfc.id } } }));
+  assert.fail("delete with transactions must ask for cascade");
+} catch (e) {
+  assert.ok(isApiError(e, "account_has_transactions"), String(e));
+  assert.equal(e.problem?.transaction_count, 1);
+}
+await unwrap(api.DELETE("/v1/accounts/{id}", { params: { path: { id: hdfc.id }, query: { cascade: true } } }));
+step("accounts: create 201 (INR) → PATCH 200 → make-default 200 (one default) → delete default 409 default_account → delete 409 account_has_transactions (transaction_count 1) → cascade 204; categories 21");
+
 try {
   await unwrap(api.PATCH("/v1/me", { body: { currency: "USD" } }));
   assert.fail("currency change after transactions must fail");

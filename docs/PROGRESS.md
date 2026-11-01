@@ -9,7 +9,7 @@ Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). St
 | 0 | `@arth/api-client` (openapi-typescript + openapi-fetch, `pnpm gen:api`), money module + `pnpm check:money`, session core with one serialized refresh, mobile API layer, `EXPO_PUBLIC_API_URL` | Done |
 | 1 | Own auth screens, secure-store tokens, session restore, logout / logout-all / change password, 401 handling | Done |
 | 2 | `/v1/me` + onboarding | Done |
-| 3 | Accounts + categories | Not started |
+| 3 | Accounts + categories | Done |
 | 4 | Transactions | Not started |
 | 5 | Budgets | Not started |
 | 6 | Dashboard + reports | Not started |
