@@ -133,9 +133,43 @@ assert.equal(storage.peek(), null);
 assert.equal(signedOutEvents, 1);
 step("revoked session → refresh refused → tokens cleared, onSignedOut fired once");
 
+const login2 = () => unwrap(api.POST("/v1/auth/login", { body: { email, password: currentPassword, client: "MOBILE" } }));
+let currentPassword = password;
+
+// Change password: this session continues, the old password stops working.
+await session.start(await login2());
+const newPassword = `lc2-${randomBytes(12).toString("hex")}`;
+await unwrap(api.POST("/v1/auth/password", { body: { current_password: currentPassword, new_password: newPassword } }));
+currentPassword = newPassword;
+await unwrap(api.GET("/v1/me"));
+try {
+  await unwrap(api.POST("/v1/auth/login", { body: { email, password, client: "MOBILE" } }));
+  assert.fail("old password must fail");
+} catch (e) {
+  assert.ok(isApiError(e, "invalid_credentials"));
+}
+step("POST /v1/auth/password → 204; this session still works; old password → 401 invalid_credentials");
+
+// Logout (this device): revokes the session owning the refresh token.
+const loggedOut = await session.ensureFreshAccessToken();
+await unwrap(api.POST("/v1/auth/logout", { body: { refresh_token: storage.peek()! } }));
+const afterLogout = await fetch(`${BASE}/v1/me`, { headers: { Authorization: `Bearer ${loggedOut}` } });
+assert.equal(afterLogout.status, 401);
+await session.end();
+step("POST /v1/auth/logout → 204; the old access token → 401");
+
+// Logout-all: every session ends, including this one.
+await session.start(await login2());
+const other = await login2(); // a second "device"
+await unwrap(api.POST("/v1/auth/logout-all"));
+const otherAfter = await fetch(`${BASE}/v1/me`, { headers: { Authorization: `Bearer ${other.access_token}` } });
+assert.equal(otherAfter.status, 401);
+await session.end();
+step("POST /v1/auth/logout-all → 204; another device's token → 401");
+
 // Clean up: log in again and delete the throwaway user.
-await session.start(await unwrap(api.POST("/v1/auth/login", { body: { email, password, client: "MOBILE" } })));
-await unwrap(api.DELETE("/v1/me", { body: { password } }));
+await session.start(await login2());
+await unwrap(api.DELETE("/v1/me", { body: { password: currentPassword } }));
 step("DELETE /v1/me → 204 (throwaway user removed)");
 
 console.log("\nlive check passed");
