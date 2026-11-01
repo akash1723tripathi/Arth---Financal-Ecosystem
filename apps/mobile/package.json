@@ -12,6 +12,7 @@
     "bundle:android": "expo export --platform android --output-dir dist"
   },
   "dependencies": {
+    "@arth/api-client": "workspace:*",
     "@clerk/expo": "3.1.5",
     "@expo/vector-icons": "^15.0.3",
     "@hookform/resolvers": "^5.4.0",

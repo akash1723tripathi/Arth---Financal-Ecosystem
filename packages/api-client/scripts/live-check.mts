@@ -1,0 +1,141 @@
+// Live check of the client + session core against a RUNNING local Arth API (dev only).
+//   pnpm --filter @arth/api-client live-check            (API_URL defaults to http://localhost:8080)
+// Registers a throwaway user, then: login → authenticated call → refresh, and proves that concurrent 401s
+// trigger exactly ONE refresh (rotation with reuse detection has no grace window, DECISIONS Q-8).
+// Needs Node >= 22.18 (TypeScript type stripping). No test runner, no extra dependencies.
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { createArthClient, parseMoneyInput, unwrap, isApiError } from "../src/index.ts";
+import { createSession } from "../src/session.ts";
+
+const BASE = (process.env.API_URL ?? "http://localhost:8080").replace(/\/+$/, "");
+if (!/^http:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(BASE)) {
+  console.error(`Refusing to run against ${BASE}: local development URLs only.`);
+  process.exit(1);
+}
+
+let refreshCalls = 0;
+const countingFetch = (r: Request) => {
+  if (r.url.endsWith("/v1/auth/refresh")) refreshCalls++;
+  return fetch(r);
+};
+
+function memoryStorage() {
+  let v: string | null = null;
+  return { get: async () => v, set: async (t: string) => void (v = t), remove: async () => void (v = null), peek: () => v };
+}
+
+let clockOffset = 0;
+let signedOutEvents = 0;
+const storage = memoryStorage();
+const session = createSession({
+  baseUrl: BASE,
+  storage,
+  fetch: countingFetch,
+  now: () => Date.now() + clockOffset,
+  onSignedOut: () => void signedOutEvents++,
+});
+const api = createArthClient({ baseUrl: BASE, fetch: session.authedFetch });
+
+const step = (s: string) => console.log(`ok  ${s}`);
+const email = `live-check-${randomBytes(4).toString("hex")}@example.com`;
+const password = `lc-${randomBytes(12).toString("hex")}`; // random, never printed
+
+const health = await unwrap(api.GET("/healthz"));
+step(`GET /healthz → ${health.status}`);
+
+const reg = await unwrap(api.POST("/v1/auth/register", { body: { email, password, name: "Live Check", client: "MOBILE" } }));
+assert.equal(reg.user.needs_onboarding, true);
+step("POST /v1/auth/register → 201, needs_onboarding=true");
+
+const login = await unwrap(api.POST("/v1/auth/login", { body: { email, password, client: "MOBILE" } }));
+await session.start(login);
+step("POST /v1/auth/login → 200, refresh token stored");
+
+try {
+  await unwrap(api.POST("/v1/auth/login", { body: { email, password: "wrong-password-123", client: "MOBILE" } }));
+  assert.fail("wrong password must fail");
+} catch (e) {
+  assert.ok(isApiError(e, "invalid_credentials"));
+  step("wrong password → 401 invalid_credentials (no refresh attempted)");
+}
+
+const me = await unwrap(api.GET("/v1/me"));
+assert.equal(me.email, email);
+step("GET /v1/me with bearer token → 200");
+
+await unwrap(api.POST("/v1/me/onboarding", { body: { currency: "INR", timezone: "Asia/Kolkata", opening_balance_minor: 500000 } }));
+const accounts = await unwrap(api.GET("/v1/accounts"));
+const cats = await unwrap(api.GET("/v1/categories", { params: { query: { kind: "EXPENSE" } } }));
+const parsed = parseMoneyInput("450.50", "INR");
+assert.ok(parsed.ok);
+const created = await unwrap(
+  api.POST("/v1/transactions", {
+    body: {
+      account_id: accounts.data[0].id,
+      category_id: cats.data[0].id,
+      type: "EXPENSE",
+      amount_minor: parsed.minor,
+      occurred_on: new Date().toISOString().slice(0, 10),
+      description: "live-check",
+    },
+  }),
+);
+assert.equal(created.transaction.amount_minor, 45050);
+assert.equal(created.account.balance_minor, 500000 - 45050);
+step(`"450.50" → amount_minor ${created.transaction.amount_minor}, balance ${created.account.balance_minor}`);
+
+// Proactive refresh: pretend the access token expired; 5 parallel calls → exactly 1 refresh.
+refreshCalls = 0;
+clockOffset = 16 * 60 * 1000;
+await Promise.all(Array.from({ length: 5 }, () => unwrap(api.GET("/v1/me"))));
+assert.equal(refreshCalls, 1, `expected 1 refresh, got ${refreshCalls}`);
+clockOffset = 0;
+step("5 parallel calls with an expired access token → exactly 1 refresh, all 200");
+
+// Reactive refresh: the server rejects the access token (401 unauthorized) for 6 parallel calls → exactly 1 refresh.
+refreshCalls = 0;
+const rt = storage.peek()!;
+await session.start({ ...login, access_token: "not-a-valid-jwt", refresh_token: rt, access_expires_in: 900 });
+const results = await Promise.all(Array.from({ length: 6 }, () => unwrap(api.GET("/v1/accounts"))));
+assert.equal(results.length, 6);
+assert.equal(refreshCalls, 1, `expected 1 refresh, got ${refreshCalls}`);
+step("6 parallel calls answered 401 unauthorized → exactly 1 refresh, each retried once → all 200");
+
+// The session survived (no reuse detected): one more explicit refresh still works.
+assert.equal(await session.refresh(), true);
+await unwrap(api.GET("/v1/dashboard"));
+step("session still valid after the parallel burst (no reuse revocation): refresh → 200, GET /v1/dashboard → 200");
+
+// Negative control: what the serialization prevents. Two raw refreshes with the same token at once.
+const sameToken = storage.peek()!;
+const raw = await Promise.all(
+  [0, 1].map(() =>
+    fetch(`${BASE}/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: sameToken }),
+    }).then((r) => r.status),
+  ),
+);
+assert.deepEqual([...raw].sort(), [200, 401]);
+step(`negative control: 2 UNserialized refreshes with one token → statuses ${raw.join(",")} (reuse detected)`);
+
+// …and that revoked the session: the next call 401s, the refresh is refused, the session ends locally.
+signedOutEvents = 0;
+try {
+  await unwrap(api.GET("/v1/me"));
+  assert.fail("expected the revoked session to fail");
+} catch (e) {
+  assert.ok(isApiError(e, "unauthorized") || isApiError(e, "refresh_invalid"), String(e));
+}
+assert.equal(storage.peek(), null);
+assert.equal(signedOutEvents, 1);
+step("revoked session → refresh refused → tokens cleared, onSignedOut fired once");
+
+// Clean up: log in again and delete the throwaway user.
+await session.start(await unwrap(api.POST("/v1/auth/login", { body: { email, password, client: "MOBILE" } })));
+await unwrap(api.DELETE("/v1/me", { body: { password } }));
+step("DELETE /v1/me → 204 (throwaway user removed)");
+
+console.log("\nlive check passed");

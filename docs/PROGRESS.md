@@ -2,6 +2,23 @@
 
 Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). Start every session by reading this file (`/status`).
 
+## Session: wire mobile to the Go API (branch `feat/mobile-go-wiring`, 2026-11-01)
+
+| Step | What | Status |
+| --- | --- | --- |
+| 0 | `@arth/api-client` (openapi-typescript + openapi-fetch, `pnpm gen:api`), money module + `pnpm check:money`, session core with one serialized refresh, mobile API layer, `EXPO_PUBLIC_API_URL` | Done |
+| 1 | Own auth screens, secure-store tokens, session restore, logout / logout-all / change password, 401 handling | Not started |
+| 2 | `/v1/me` + onboarding | Not started |
+| 3 | Accounts + categories | Not started |
+| 4 | Transactions | Not started |
+| 5 | Budgets | Not started |
+| 6 | Dashboard + reports | Not started |
+| 7 | CSV export | Not started |
+| 8 | Account deletion + privacy link | Not started |
+| 9 | Receipt scan (server); voice + assistant hidden in release | Not started |
+| 10 | Remove Clerk, Supabase, client Gemini, `EXPO_PUBLIC_BACKEND` | Not started |
+| 11 | Local preview tooling (`dev:*`, seed, `docs/PREVIEW_LOCALLY.md`) | Not started |
+
 ## Phase / status
 
 - **Phase 1 (mobile restructure): done** (previous session, merged into `main` as a fast-forward).
