@@ -158,6 +158,16 @@ await unwrap(api.DELETE("/v1/budgets/categories/{category_id}", { params: { path
 assert.equal((await unwrap(api.GET("/v1/budgets"))).data.length, 1);
 step(`budgets: PUT overall 200 + category 200 → list overall first, category spent ${catBudget.spent_minor} / ${catBudget.amount_minor} (${catBudget.percent_used}%) → DELETE 204 twice (idempotent)`);
 
+// Dashboard: the server's aggregates are consistent with the accounts and transactions.
+const dash = await unwrap(api.GET("/v1/dashboard"));
+const inrAccounts = (await unwrap(api.GET("/v1/accounts"))).data.filter((a) => a.currency === dash.currency);
+assert.equal(dash.total_balance_minor, inrAccounts.reduce((sum, a) => sum + a.balance_minor, 0));
+assert.ok(dash.recent.length <= 5);
+const amounts = dash.expense_by_category.map((c) => c.amount_minor);
+assert.deepEqual(amounts, [...amounts].sort((a, b) => b - a));
+assert.equal(dash.month.net_minor, dash.month.income_minor - dash.month.expense_minor);
+step(`dashboard: total ${dash.total_balance_minor} = Σ ${dash.currency} balances, expense ${dash.month.expense_minor}, ${dash.expense_by_category.length} categories largest first, ${dash.recent.length} recent`);
+
 try {
   await unwrap(api.PATCH("/v1/me", { body: { currency: "USD" } }));
   assert.fail("currency change after transactions must fail");
