@@ -5,6 +5,7 @@ import { useDailyReportQuery } from "@/hooks/queries/useReportsQuery";
 import { useTransactionsInfiniteQuery } from "@/hooks/queries/useTransactionsQuery";
 import { useDeleteTransaction } from "@/hooks/mutations/useTransactionMutations";
 import { describeError } from "@/lib/api/errors";
+import { exportTransactionsToCsv } from "@/lib/utils/exportTransactions";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
@@ -104,7 +105,13 @@ export default function TransactionsScreen() {
     if (exporting) return;
     setExporting(true);
     try {
-      Alert.alert("Export", "CSV export moves to the server in the next step.");
+      const { count } = await exportTransactionsToCsv(activeAccountId);
+      if (count === 0) {
+        Alert.alert("Nothing to export", "No transactions in the export window.");
+      }
+    } catch (err) {
+      console.error("Export failed:", err);
+      Alert.alert("Error", describeError(err, "Couldn't export transactions."));
     } finally {
       setExporting(false);
     }

@@ -168,6 +168,13 @@ assert.deepEqual(amounts, [...amounts].sort((a, b) => b - a));
 assert.equal(dash.month.net_minor, dash.month.income_minor - dash.month.expense_minor);
 step(`dashboard: total ${dash.total_balance_minor} = Σ ${dash.currency} balances, expense ${dash.month.expense_minor}, ${dash.expense_by_category.length} categories largest first, ${dash.recent.length} recent`);
 
+// CSV export, exactly as the app calls it (text through the authed fetch).
+const csv = await api.GET("/v1/transactions/export", { params: { query: { format: "csv", from: today, to: today } }, parseAs: "text" });
+assert.equal(csv.response.status, 200);
+assert.match(csv.response.headers.get("Content-Disposition") ?? "", /filename="arth-transactions-.*\.csv"/);
+assert.ok(typeof csv.data === "string" && csv.data.includes("450.50"));
+step(`export: 200 text/csv, ${String(csv.data).trim().split("\n").length - 1} rows, contains "450.50", ${csv.response.headers.get("Content-Disposition")}`);
+
 try {
   await unwrap(api.PATCH("/v1/me", { body: { currency: "USD" } }));
   assert.fail("currency change after transactions must fail");

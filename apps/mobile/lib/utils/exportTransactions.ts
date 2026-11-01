@@ -1,57 +1,40 @@
-import { Transaction } from "@/lib/services/transactions";
+import { api } from "@/lib/api/client";
+import { toApiError } from "@arth/api-client";
+import { format, subDays } from "date-fns";
 import { Directory, File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
-import { format } from "date-fns";
 
-// Number of days of history included in the export. Change this to
-// customise the export window (e.g. 90 for a quarter, or make it a
-// parameter if we ever want the user to pick a custom range).
+// Days of history in the export (same window as before). The server allows up to 366 days.
 const EXPORT_WINDOW_DAYS = 30;
 
-function toCsvCell(value: string | number | null) {
-  if (value === null) return "";
-  const str = String(value);
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
-  return str;
-}
+/**
+ * Download the CSV from GET /v1/transactions/export (built by the server: UTF-8, header row, amounts as decimal
+ * strings in each transaction's currency), save it to the cache and open the share sheet.
+ * The account filter is applied; the type filter and search are not (the endpoint has no such filters).
+ */
+export async function exportTransactionsToCsv(accountId?: string | null) {
+  const today = new Date();
+  const from = format(subDays(today, EXPORT_WINDOW_DAYS), "yyyy-MM-dd");
+  const to = format(today, "yyyy-MM-dd");
 
-function buildCsv(transactions: Transaction[]) {
-  const header = [
-    "Date",
-    "Type",
-    "Category",
-    "Description",
-    "Amount",
-    "Input Method",
-  ];
-  const rows = transactions.map((tx) => [
-    format(new Date(tx.date), "yyyy-MM-dd"),
-    tx.type,
-    tx.category,
-    tx.description ?? "",
-    tx.amount,
-    tx.input_method,
-  ]);
+  const { data, error, response } = await api.GET("/v1/transactions/export", {
+    params: { query: { format: "csv", from, to, ...(accountId ? { account_id: accountId } : {}) } },
+    parseAs: "text",
+  });
+  if (error !== undefined || !response.ok || typeof data !== "string") {
+    throw toApiError(response, error);
+  }
 
-  return [header, ...rows]
-    .map((row) => row.map(toCsvCell).join(","))
-    .join("\n");
-}
+  const lines = data.split(/\r?\n/).filter((l) => l.length > 0);
+  const count = Math.max(lines.length - 1, 0);
+  if (count === 0) return { count, uri: null };
 
-export async function exportTransactionsToCsv(transactions: Transaction[]) {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - EXPORT_WINDOW_DAYS);
-
-  const recentTransactions = transactions.filter(
-    (tx) => new Date(tx.date) >= cutoff
-  );
-
-  const csv = buildCsv(recentTransactions);
-  const fileName = `transactions-${format(new Date(), "yyyy-MM-dd")}.csv`;
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `arth-transactions-${from}-${to}.csv`;
   const file = new File(new Directory(Paths.cache), fileName);
   if (file.exists) file.delete();
   file.create();
-  file.write(csv);
+  file.write(data);
 
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(file.uri, {
@@ -61,5 +44,5 @@ export async function exportTransactionsToCsv(transactions: Transaction[]) {
     });
   }
 
-  return { count: recentTransactions.length, uri: file.uri };
+  return { count, uri: file.uri };
 }
