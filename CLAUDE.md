@@ -77,6 +77,8 @@ Local only. Branch per piece of work (current: `feat/go-api`). Conventional Comm
 | Run mobile | `pnpm mobile` (see `docs/RUN_LOCALLY.md`) |
 | Local Postgres | `pnpm db:up` / `pnpm db:down` (needs `.env` from `.env.example`) |
 | Go API | `cd apps/api; go run ./cmd/api` (+ `migrate up`, `go test ./...`), see `docs/RUN_API_LOCALLY.md` |
+| Local preview (DB → API → seed → app) | `pnpm dev:db`, `pnpm dev:api`, `pnpm dev:seed`, `pnpm dev:mobile` (separate terminals), see `docs/PREVIEW_LOCALLY.md` |
+| Regenerate the TS client / money checks | `pnpm gen:api` · `pnpm check:money` · `pnpm --filter @arth/api-client live-check` |
 
 ## Docs index
 
@@ -95,3 +97,4 @@ Local only. Branch per piece of work (current: `feat/go-api`). Conventional Comm
 | `docs/DEPLOYMENT.md` | Environments, env var names, CI/CD (hosting OPEN) |
 | `docs/RUN_LOCALLY.md` | Windows steps to run the mobile app on an emulator |
 | `docs/RUN_API_LOCALLY.md` | Windows PowerShell steps to run the Go API, migrations, tests and example calls |
+| `docs/PREVIEW_LOCALLY.md` | One-command-per-terminal local preview on the Android emulator, troubleshooting, manual test checklist |

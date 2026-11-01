@@ -16,6 +16,10 @@
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f db",
     "gen:api": "pnpm --filter @arth/api-client gen",
-    "check:money": "pnpm --filter @arth/api-client check:money"
+    "check:money": "pnpm --filter @arth/api-client check:money",
+    "dev:db": "docker compose up -d db",
+    "dev:api": "go -C apps/api run ./cmd/api migrate up && go -C apps/api run ./cmd/api",
+    "dev:seed": "node scripts/dev-seed.mjs",
+    "dev:mobile": "pnpm --filter @arth/mobile start"
   }
 }

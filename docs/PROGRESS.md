@@ -17,7 +17,7 @@ Last updated: **2026-11-01**, branch `feat/go-api` (Go API session complete). St
 | 8 | Account deletion + privacy link | Not started |
 | 9 | Receipt scan (server); voice + assistant hidden in release | Not started |
 | 10 | Remove Clerk, Supabase, client Gemini, `EXPO_PUBLIC_BACKEND` | Not started |
-| 11 | Local preview tooling (`dev:*`, seed, `docs/PREVIEW_LOCALLY.md`) | Not started |
+| 11 | Local preview tooling (`dev:*`, seed, `docs/PREVIEW_LOCALLY.md`) | Done (kept in sync with later steps) |
 
 ## Phase / status
 
