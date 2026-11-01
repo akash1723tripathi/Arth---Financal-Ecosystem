@@ -85,6 +85,16 @@ assert.equal(created.transaction.amount_minor, 45050);
 assert.equal(created.account.balance_minor, 500000 - 45050);
 step(`"450.50" → amount_minor ${created.transaction.amount_minor}, balance ${created.account.balance_minor}`);
 
+try {
+  await unwrap(api.PATCH("/v1/me", { body: { currency: "USD" } }));
+  assert.fail("currency change after transactions must fail");
+} catch (e) {
+  assert.ok(isApiError(e, "currency_locked"), String(e));
+}
+const renamed = await unwrap(api.PATCH("/v1/me", { body: { name: "Live Check Renamed" } }));
+assert.equal(renamed.name, "Live Check Renamed");
+step("PATCH /v1/me currency after a transaction → 409 currency_locked; name change → 200");
+
 // Proactive refresh: pretend the access token expired; 5 parallel calls → exactly 1 refresh.
 refreshCalls = 0;
 clockOffset = 16 * 60 * 1000;

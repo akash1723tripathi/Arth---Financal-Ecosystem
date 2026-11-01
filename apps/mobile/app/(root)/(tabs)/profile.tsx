@@ -4,11 +4,11 @@ import { CurrencyPicker } from "@/components/CurrencyPicker";
 import { useSetDefaultAccount } from "@/hooks/mutations/useAccountMutations";
 import { useLogout, useLogoutAll } from "@/hooks/mutations/useAuthMutations";
 import { useAccountsQuery } from "@/hooks/queries/useAccountsQuery";
-import { useMeQuery } from "@/hooks/queries/useMeQuery";
-import { useSupabase } from "@/hooks/useSupabase";
+import { useMeQuery, useUserCurrency } from "@/hooks/queries/useMeQuery";
+import { useUpdateMe } from "@/hooks/mutations/useMeMutations";
+import { isApiError } from "@/lib/api/client";
 import { Account, AccountType } from "@/lib/services/accounts";
 import { formatPrice } from "@/lib/utils";
-import { useUserStore } from "@/store/userStore";
 import { describeError } from "@/lib/api/errors";
 import { Feather } from "@expo/vector-icons";
 import { useState } from "react";
@@ -83,9 +83,8 @@ export default function ProfileScreen() {
   const { data: me } = useMeQuery();
   const { mutateAsync: logout } = useLogout();
   const { mutateAsync: logoutAll } = useLogoutAll();
-  const supabase = useSupabase();
-  const currency = useUserStore((state) => state.currency);
-  const setCurrency = useUserStore((state) => state.setCurrency);
+  const currency = useUserCurrency();
+  const { mutateAsync: updateMe } = useUpdateMe();
   const [biometricLock, setBiometricLock] = useState(false);
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -155,15 +154,16 @@ export default function ProfileScreen() {
 
   const handleCurrencySelect = async (selected: { code: string }) => {
     setCurrencyPickerOpen(false);
+    if (selected.code === currency) return;
     try {
-      const { error } = await supabase
-        .from("users")
-        .update({ currency: selected.code })
-        .eq("clerk_id", me?.id ?? "");
-      if (error) throw error;
-      setCurrency(selected.code);
-    } catch {
-      Alert.alert("Error", "Couldn't update your currency.");
+      await updateMe({ currency: selected.code });
+    } catch (err) {
+      Alert.alert(
+        "Error",
+        isApiError(err, "currency_locked")
+          ? "You can't change your currency after adding transactions."
+          : describeError(err, "Couldn't update your currency.")
+      );
     }
   };
 
