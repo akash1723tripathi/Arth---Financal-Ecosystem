@@ -1,15 +1,12 @@
+import type { BudgetProgress } from "@arth/api-client";
 import { BudgetModal } from "@/components/BudgetModal";
 import { TransactionRow } from "@/components/TransactionRow";
-import { getCategoryConfig } from "@/constants/categories";
-import { useAccountsQuery } from "@/hooks/queries/useAccountsQuery";
-import { useBudgetQuery } from "@/hooks/queries/useBudgetQuery";
-import { useTransactionsQuery } from "@/hooks/queries/useTransactionsQuery";
-import { Transaction } from "@/lib/services/transactions";
-import { formatPrice } from "@/lib/utils";
-import { useUserStore } from "@/store/userStore";
-import { useUser } from "@clerk/expo";
+import { useBudgetsQuery } from "@/hooks/queries/useBudgetsQuery";
+import { toCategoryDisplay, useCategories } from "@/hooks/queries/useCategoriesQuery";
+import { useDashboardQuery } from "@/hooks/queries/useDashboardQuery";
+import { useMeQuery } from "@/hooks/queries/useMeQuery";
+import { formatMinor } from "@/lib/money";
 import { Feather } from "@expo/vector-icons";
-import { isSameMonth } from "date-fns";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
@@ -40,7 +37,7 @@ const QUICK_ACTIONS = [
   },
   {
     icon: "mic",
-    label: "Voice Entry",
+    label: "Voice Entry (dev)",
     action: "voice",
     color: "#FF6B4A",
   },
@@ -52,82 +49,55 @@ const QUICK_ACTIONS = [
   },
 ] as const;
 
-export default function HomeScreen() {
-  const { user } = useUser();
-  const router = useRouter();
-  const currency = useUserStore((s) => s.currency);
+// Voice entry and the assistant have no server endpoints yet: shown only in development builds.
+const VISIBLE_QUICK_ACTIONS = QUICK_ACTIONS.filter((a) => __DEV__ || a.action !== "voice");
 
+/** Bar colour from the server's percent_used: coral >= 100 %, yellow >= 80 %, green otherwise. */
+function budgetColor(b: BudgetProgress) {
+  return b.percent_used >= 100 ? "#FF6B4A" : b.percent_used >= 80 ? "#F7DC6F" : "#3DDC84";
+}
+
+export default function HomeScreen() {
+  const router = useRouter();
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
 
+  const { data: me, refetch: refetchMe } = useMeQuery();
   const {
-    data: accounts = [],
-    isLoading: accountsLoading,
-    isRefetching: accountsRefetching,
-    refetch: refetchAccounts,
-  } = useAccountsQuery();
-  const {
-    data: transactions = [],
-    isLoading: transactionsLoading,
-    isRefetching: transactionsRefetching,
-    refetch: refetchTransactions,
-  } = useTransactionsQuery();
-  const { data: budget = null, refetch: refetchBudget } = useBudgetQuery();
-
-  const loading = accountsLoading || transactionsLoading;
-  const refreshing = accountsRefetching || transactionsRefetching;
+    data: dashboard,
+    isLoading: loading,
+    isRefetching: refreshing,
+    isError,
+    refetch: refetchDashboard,
+  } = useDashboardQuery();
+  const { data: budgets = [], refetch: refetchBudgets } = useBudgetsQuery();
+  const { byId: categoryById } = useCategories();
 
   const onRefresh = () => {
-    refetchAccounts();
-    refetchTransactions();
-    refetchBudget();
+    refetchDashboard();
+    refetchBudgets();
+    refetchMe();
   };
 
-  const totalBalance = useMemo(
-    () => accounts.reduce((sum, account) => sum + account.balance, 0),
-    [accounts]
-  );
+  // All figures come from the server (GET /v1/dashboard); the client only formats them.
+  const currency = dashboard?.currency ?? me?.currency ?? "INR";
+  const budget = dashboard?.budget ?? null;
+  const categoryBudgets = budgets.filter((b) => b.category_id !== null);
+  const recentTransactions = dashboard?.recent ?? [];
+  const firstName = me?.name?.trim().split(/\s+/)[0] || "there";
 
-  const monthTransactions = useMemo(() => {
-    const now = new Date();
-    return transactions.filter((tx) => isSameMonth(new Date(tx.date), now));
-  }, [transactions]);
-
-  const monthIncome = useMemo(
+  const expenseBreakdown = useMemo(
     () =>
-      monthTransactions
-        .filter((tx) => tx.type === "INCOME")
-        .reduce((sum, tx) => sum + tx.amount, 0),
-    [monthTransactions]
+      (dashboard?.expense_by_category ?? []).map((c) => {
+        const display = toCategoryDisplay(categoryById.get(c.category_id));
+        return {
+          categoryId: c.category_id,
+          amountMinor: c.amount_minor,
+          label: display.label,
+          color: display.color,
+        };
+      }),
+    [dashboard, categoryById]
   );
-  const monthExpense = useMemo(
-    () =>
-      monthTransactions
-        .filter((tx) => tx.type === "EXPENSE")
-        .reduce((sum, tx) => sum + tx.amount, 0),
-    [monthTransactions]
-  );
-
-  const recentTransactions = useMemo(
-    () => transactions.slice(0, 5),
-    [transactions]
-  );
-
-  const expenseBreakdown = useMemo(() => {
-    const map: Record<string, number> = {};
-    monthTransactions
-      .filter((tx) => tx.type === "EXPENSE")
-      .forEach((tx) => {
-        map[tx.category] = (map[tx.category] ?? 0) + tx.amount;
-      });
-
-    return Object.entries(map)
-      .sort((a, b) => b[1] - a[1])
-      .map(([category, amount]) => ({
-        category: category as Transaction["category"],
-        amount,
-        color: getCategoryConfig(category as Transaction["category"]).color,
-      }));
-  }, [monthTransactions]);
 
   return (
     <SafeAreaView className="flex-1 bg-brand-bg" edges={["top"]}>
@@ -152,16 +122,16 @@ export default function HomeScreen() {
                   {getGreeting()}
                 </Text>
                 <Text className="text-brand-text-primary text-base font-medium">
-                  {user?.firstName ?? "there"}
+                  {firstName}
                 </Text>
               </View>
               <TouchableOpacity
                 onPress={() => router.push("/(root)/(tabs)/profile")}
                 className="w-[38px] h-[38px] rounded-full bg-[#1A1D26] items-center justify-center overflow-hidden"
               >
-                {user?.imageUrl && user.hasImage ? (
+                {me?.avatar_url ? (
                   <Image
-                    source={{ uri: user.imageUrl }}
+                    source={{ uri: me.avatar_url }}
                     style={{ width: 38, height: 38 }}
                     contentFit="cover"
                   />
@@ -177,26 +147,26 @@ export default function HomeScreen() {
               Total balance
             </Text>
             <Text className="text-brand-text-primary text-[38px] font-medium tracking-tight">
-              {formatPrice(totalBalance, currency)}
+              {formatMinor(dashboard?.total_balance_minor ?? 0, currency)}
             </Text>
             <View className="flex-row gap-3.5 mt-2.5">
               <View className="flex-row items-center gap-1.5">
                 <Feather name="arrow-up-right" size={14} color="#3DDC84" />
                 <Text className="text-brand-success text-[13px]">
-                  {formatPrice(monthIncome, currency)}
+                  {formatMinor(dashboard?.month.income_minor ?? 0, currency)}
                 </Text>
               </View>
               <View className="flex-row items-center gap-1.5">
                 <Feather name="arrow-down-right" size={14} color="#FF6B4A" />
                 <Text className="text-brand-coral text-[13px]">
-                  {formatPrice(monthExpense, currency)}
+                  {formatMinor(dashboard?.month.expense_minor ?? 0, currency)}
                 </Text>
               </View>
             </View>
           </View>
 
           <View className="flex-row gap-2.5">
-            {QUICK_ACTIONS.map((action) => (
+            {VISIBLE_QUICK_ACTIONS.map((action) => (
               <TouchableOpacity
                 key={action.label}
                 onPress={() =>
@@ -224,6 +194,7 @@ export default function HomeScreen() {
 
         {/* Light body */}
         <View className="px-5 pt-[18px] pb-5">
+          {__DEV__ && (
           <TouchableOpacity
             onPress={() => router.push("/(root)/(tabs)/assistant")}
             className="bg-white rounded-[18px] border border-[#E8E6DF] p-3.5 flex-row items-center gap-2.5 mb-[18px]"
@@ -232,10 +203,11 @@ export default function HomeScreen() {
               <View className="w-[7px] h-[7px] rounded-full bg-brand-blue" />
             </View>
             <Text className="text-brand-text-muted text-[13px] flex-1">
-              Ask AI anything about your money
+              Ask AI anything about your money · DEV only
             </Text>
             <Feather name="arrow-right" size={16} color="#4A9EFF" />
           </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             onPress={() => setBudgetModalOpen(true)}
@@ -252,23 +224,15 @@ export default function HomeScreen() {
             {budget ? (
               <>
                 <Text className="text-brand-text-secondary text-xs mb-2">
-                  {formatPrice(monthExpense, currency)} of{" "}
-                  {formatPrice(budget.amount, currency)} spent
+                  {formatMinor(budget.spent_minor, budget.currency)} of{" "}
+                  {formatMinor(budget.amount_minor, budget.currency)} spent
                 </Text>
                 <View className="h-2 rounded-full bg-[#F0EEE7] overflow-hidden">
                   <View
                     className="h-2 rounded-full"
                     style={{
-                      width: `${Math.min(
-                        Math.round((monthExpense / budget.amount) * 100),
-                        100
-                      )}%`,
-                      backgroundColor:
-                        monthExpense >= budget.amount
-                          ? "#FF6B4A"
-                          : monthExpense >= budget.amount * 0.8
-                          ? "#F7DC6F"
-                          : "#3DDC84",
+                      width: `${Math.min(budget.percent_used, 100)}%`,
+                      backgroundColor: budgetColor(budget),
                     }}
                   />
                 </View>
@@ -278,6 +242,34 @@ export default function HomeScreen() {
                 Tap to set a monthly spending budget
               </Text>
             )}
+
+            {categoryBudgets.map((b) => {
+              const display = toCategoryDisplay(
+                b.category_id ? categoryById.get(b.category_id) : undefined
+              );
+              return (
+                <View key={b.id} className="mt-3">
+                  <View className="flex-row justify-between mb-1">
+                    <Text className="text-brand-text-secondary text-[11px]">
+                      {display.icon} {display.label}
+                    </Text>
+                    <Text className="text-brand-text-secondary text-[11px]">
+                      {formatMinor(b.spent_minor, b.currency)} of{" "}
+                      {formatMinor(b.amount_minor, b.currency)}
+                    </Text>
+                  </View>
+                  <View className="h-1.5 rounded-full bg-[#F0EEE7] overflow-hidden">
+                    <View
+                      className="h-1.5 rounded-full"
+                      style={{
+                        width: `${Math.min(b.percent_used, 100)}%`,
+                        backgroundColor: budgetColor(b),
+                      }}
+                    />
+                  </View>
+                </View>
+              );
+            })}
           </TouchableOpacity>
 
           {expenseBreakdown.length > 0 && (
@@ -288,7 +280,7 @@ export default function HomeScreen() {
               <View className="flex-row items-center">
                 <PieChart
                   data={expenseBreakdown.map((c) => ({
-                    value: c.amount,
+                    value: c.amountMinor, // slice size only (display), no money maths
                     color: c.color,
                   }))}
                   radius={60}
@@ -298,7 +290,7 @@ export default function HomeScreen() {
                 <View className="flex-1 ml-4 gap-1.5">
                   {expenseBreakdown.slice(0, 6).map((c) => (
                     <View
-                      key={c.category}
+                      key={c.categoryId}
                       className="flex-row items-center justify-between"
                     >
                       <View className="flex-row items-center gap-1.5">
@@ -307,11 +299,11 @@ export default function HomeScreen() {
                           style={{ backgroundColor: c.color }}
                         />
                         <Text className="text-brand-text-secondary text-[11px]">
-                          {getCategoryConfig(c.category).label}
+                          {c.label}
                         </Text>
                       </View>
                       <Text className="text-brand-bg text-[11px] font-medium">
-                        {formatPrice(c.amount, currency)}
+                        {formatMinor(c.amountMinor, currency)}
                       </Text>
                     </View>
                   ))}
@@ -335,6 +327,19 @@ export default function HomeScreen() {
             <View className="items-center py-6">
               <ActivityIndicator color="#4A9EFF" />
             </View>
+          ) : isError && !dashboard ? (
+            <View className="items-center py-6">
+              <Feather name="alert-circle" size={28} color="#FF6B4A" />
+              <Text className="text-brand-text-muted text-sm mt-3">
+                Couldn&apos;t load your dashboard.
+              </Text>
+              <TouchableOpacity
+                onPress={onRefresh}
+                className="mt-3 bg-brand-bg rounded-full px-4 py-2"
+              >
+                <Text className="text-white text-xs font-medium">Retry</Text>
+              </TouchableOpacity>
+            </View>
           ) : recentTransactions.length === 0 ? (
             <View className="items-center py-6">
               <Feather name="inbox" size={28} color="#BDC3C7" />
@@ -350,14 +355,11 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
 
-      {user && (
-        <BudgetModal
-          visible={budgetModalOpen}
-          budget={budget}
-          onClose={() => setBudgetModalOpen(false)}
-          onSaved={() => setBudgetModalOpen(false)}
-        />
-      )}
+      <BudgetModal
+        visible={budgetModalOpen}
+        onClose={() => setBudgetModalOpen(false)}
+        onSaved={() => setBudgetModalOpen(false)}
+      />
     </SafeAreaView>
   );
 }

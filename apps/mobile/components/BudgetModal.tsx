@@ -1,58 +1,108 @@
-import { useUpsertBudget } from "@/hooks/mutations/useBudgetMutations";
-import { Budget } from "@/lib/services/budgets";
-import { COLORS } from "@/constants/theme";
 import { FormSheetModal } from "@/components/FormSheetModal";
-import { useEffect, useState } from "react";
-import { Text, TextInput, TouchableOpacity } from "react-native";
+import { PillGroup } from "@/components/PillGroup";
+import { COLORS } from "@/constants/theme";
+import { useDeleteBudget, usePutBudget } from "@/hooks/mutations/useBudgetMutations";
+import { useBudgetsQuery } from "@/hooks/queries/useBudgetsQuery";
+import { useCategories } from "@/hooks/queries/useCategoriesQuery";
+import { useUserCurrency } from "@/hooks/queries/useMeQuery";
+import { isApiError } from "@/lib/api/client";
+import { describeError } from "@/lib/api/errors";
+import { minorToInput, moneyInputErrorText, parseMoneyInput } from "@/lib/money";
+import { useEffect, useMemo, useState } from "react";
+import { Text, TextInput, TouchableOpacity, View } from "react-native";
 
+const OVERALL = "overall";
+
+/**
+ * Monthly budget sheet: the overall budget (PUT /v1/budgets/overall) or one per expense category
+ * (PUT /v1/budgets/categories/{id}). Budgets are in the user's currency.
+ */
 export function BudgetModal({
   visible,
-  budget,
   onClose,
   onSaved,
 }: {
   visible: boolean;
-  budget: Budget | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const currency = useUserCurrency();
+  const { data: budgets = [] } = useBudgetsQuery();
+  const { expense } = useCategories();
+  const { mutateAsync: putBudget, isPending: saving } = usePutBudget();
+  const { mutateAsync: deleteBudget, isPending: deleting } = useDeleteBudget();
+
+  const [scope, setScope] = useState<string>(OVERALL);
   const [amount, setAmount] = useState("");
   const [error, setError] = useState("");
-  const { mutateAsync: upsertBudget, isPending: saving } = useUpsertBudget();
+
+  const current = useMemo(
+    () => budgets.find((b) => (scope === OVERALL ? b.category_id === null : b.category_id === scope)),
+    [budgets, scope]
+  );
+
+  useEffect(() => {
+    if (visible) setScope(OVERALL);
+  }, [visible]);
 
   useEffect(() => {
     if (visible) {
-      setAmount(budget ? String(budget.amount) : "");
+      setAmount(current ? minorToInput(current.amount_minor, current.currency) : "");
       setError("");
     }
-  }, [visible, budget]);
+  }, [visible, current]);
+
+  const categoryId = scope === OVERALL ? null : scope;
+  const scopeName =
+    scope === OVERALL ? "Monthly budget" : `${expense.find((c) => c.id === scope)?.name ?? "Category"} budget`;
 
   const handleSave = async () => {
-    const parsedAmount = parseFloat(amount.replace(/,/g, ""));
-
-    if (!parsedAmount || parsedAmount <= 0) {
-      setError("Enter a valid monthly budget.");
+    const parsed = parseMoneyInput(amount, currency); // "50,000" INR → 5000000, no floats
+    if (!parsed.ok) {
+      setError(moneyInputErrorText(parsed.error, currency, "Enter a valid monthly budget."));
       return;
     }
-
     setError("");
     try {
-      await upsertBudget(parsedAmount);
+      await putBudget({ categoryId, amountMinor: parsed.minor });
       onSaved();
     } catch (err) {
-      console.error("Error saving budget:", err);
-      setError("Something went wrong. Please try again.");
+      setError(
+        isApiError(err, "validation_failed")
+          ? "Enter a valid monthly budget."
+          : describeError(err)
+      );
+    }
+  };
+
+  const handleRemove = async () => {
+    try {
+      await deleteBudget(categoryId);
+      onSaved();
+    } catch (err) {
+      setError(describeError(err));
     }
   };
 
   return (
     <FormSheetModal
       visible={visible}
-      title={budget ? "Edit monthly budget" : "Set monthly budget"}
+      title={budgets.length > 0 ? "Edit monthly budget" : "Set monthly budget"}
       onClose={onClose}
     >
+      <View className="mb-4">
+        <PillGroup
+          options={[
+            { key: OVERALL, label: "Overall" },
+            ...expense.map((c) => ({ key: c.id, label: c.name, icon: c.icon ?? undefined })),
+          ]}
+          value={scope}
+          onChange={setScope}
+        />
+      </View>
+
       <Text className="text-brand-bg text-xs font-medium mb-1.5">
-        Monthly budget
+        {scopeName} ({currency})
       </Text>
       <TextInput
         value={amount}
@@ -81,6 +131,14 @@ export function BudgetModal({
           {saving ? "Saving…" : "Save budget"}
         </Text>
       </TouchableOpacity>
+
+      {current && (
+        <TouchableOpacity onPress={handleRemove} disabled={deleting} className="py-3 items-center">
+          <Text className="text-brand-coral text-sm font-medium">
+            {deleting ? "Removing…" : "Remove budget"}
+          </Text>
+        </TouchableOpacity>
+      )}
     </FormSheetModal>
   );
 }

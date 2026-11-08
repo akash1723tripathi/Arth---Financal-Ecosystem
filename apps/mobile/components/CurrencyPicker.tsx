@@ -1,6 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import cc from "currency-codes";
-import getSymbol from "currency-symbol-map";
+import { SUPPORTED_CURRENCIES } from "@arth/api-client";
 import { useMemo, useState } from "react";
 import {
   FlatList,
@@ -14,14 +13,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 export type CurrencyEntry = { code: string; name: string; symbol: string };
 
-export const ALL_CURRENCIES: CurrencyEntry[] = cc
-  .codes()
-  .map((code) => ({
-    code,
-    name: cc.code(code)?.currency ?? code,
-    symbol: getSymbol(code) ?? code,
-  }))
-  .filter((c) => c.symbol !== c.code); // drop ones with no real symbol
+// The API's supported-currency allowlist (apps/api/internal/money), not every ISO code.
+export const ALL_CURRENCIES: CurrencyEntry[] = SUPPORTED_CURRENCIES.map(
+  ({ code, name, symbol }) => ({ code, name, symbol })
+);
 
 export function CurrencyPicker({
   visible,

@@ -1,38 +1,36 @@
-import { useSupabase } from "@/hooks/useSupabase";
-import {
-  createTransaction,
-  deleteTransaction,
-  NewTransaction,
-  Transaction,
-  TransactionType,
-} from "@/lib/services/transactions";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { CreateTransactionRequest, UpdateTransactionRequest } from "@arth/api-client";
+import { api, unwrap } from "@/lib/api/client";
+import { MONEY_QUERY_ROOTS } from "@/lib/query/keys";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
+function invalidateMoney(queryClient: QueryClient) {
+  MONEY_QUERY_ROOTS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
+}
+
+/** POST /v1/transactions. The server updates the account balance in the same DB transaction. */
 export function useCreateTransaction() {
-  const supabase = useSupabase();
   const queryClient = useQueryClient();
-
   return useMutation({
-    mutationFn: (payload: NewTransaction) => createTransaction(supabase, payload),
-    onSuccess: (result) => {
-      if (result.error) return;
-      queryClient.invalidateQueries({ queryKey: ["transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["accounts"] });
-    },
+    mutationFn: (body: CreateTransactionRequest) => unwrap(api.POST("/v1/transactions", { body })),
+    onSuccess: () => invalidateMoney(queryClient),
   });
 }
 
-export function useDeleteTransaction() {
-  const supabase = useSupabase();
+/** PATCH /v1/transactions/{id}: omitted fields stay unchanged; "" clears the description. */
+export function useUpdateTransaction() {
   const queryClient = useQueryClient();
-
   return useMutation({
-    mutationFn: (tx: Pick<Transaction, "id" | "account_id" | "amount" | "type">) =>
-      deleteTransaction(supabase, tx.id, tx.account_id, tx.amount, tx.type as TransactionType),
-    onSuccess: (result) => {
-      if (result.error) return;
-      queryClient.invalidateQueries({ queryKey: ["transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["accounts"] });
-    },
+    mutationFn: ({ id, body }: { id: string; body: UpdateTransactionRequest }) =>
+      unwrap(api.PATCH("/v1/transactions/{id}", { params: { path: { id } }, body })),
+    onSuccess: () => invalidateMoney(queryClient),
+  });
+}
+
+/** DELETE /v1/transactions/{id}. The server reverses the balance from the stored row. */
+export function useDeleteTransaction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.DELETE("/v1/transactions/{id}", { params: { path: { id } } })),
+    onSuccess: () => invalidateMoney(queryClient),
   });
 }

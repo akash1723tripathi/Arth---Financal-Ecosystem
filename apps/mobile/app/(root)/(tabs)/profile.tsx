@@ -1,20 +1,23 @@
 import { AccountModal } from "@/components/AccountModal";
+import { ChangePasswordModal } from "@/components/ChangePasswordModal";
+import { DeleteAccountModal } from "@/components/DeleteAccountModal";
+import { PRIVACY_POLICY_URL } from "@/lib/config";
 import { CurrencyPicker } from "@/components/CurrencyPicker";
 import { useSetDefaultAccount } from "@/hooks/mutations/useAccountMutations";
+import { useLogout, useLogoutAll } from "@/hooks/mutations/useAuthMutations";
 import { useAccountsQuery } from "@/hooks/queries/useAccountsQuery";
-import { useSupabase } from "@/hooks/useSupabase";
-import { Account, AccountType } from "@/lib/services/accounts";
-import { formatPrice } from "@/lib/utils";
-import { useUserStore } from "@/store/userStore";
-import { useAuth, useUser } from "@clerk/expo";
+import { useMeQuery, useUserCurrency } from "@/hooks/queries/useMeQuery";
+import { useUpdateMe } from "@/hooks/mutations/useMeMutations";
+import { isApiError } from "@/lib/api/client";
+import type { Account, AccountType } from "@arth/api-client";
+import { formatMinor } from "@/lib/money";
+import { describeError } from "@/lib/api/errors";
 import { Feather } from "@expo/vector-icons";
-import { Image } from "expo-image";
-import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   ScrollView,
   Switch,
   Text,
@@ -80,18 +83,18 @@ function Row({
 }
 
 export default function ProfileScreen() {
-  const { user } = useUser();
-  const { signOut } = useAuth();
-  const router = useRouter();
-  const supabase = useSupabase();
-  const currency = useUserStore((state) => state.currency);
-  const setCurrency = useUserStore((state) => state.setCurrency);
+  const { data: me } = useMeQuery();
+  const { mutateAsync: logout } = useLogout();
+  const { mutateAsync: logoutAll } = useLogoutAll();
+  const currency = useUserCurrency();
+  const { mutateAsync: updateMe } = useUpdateMe();
   const [biometricLock, setBiometricLock] = useState(false);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [currencyPickerOpen, setCurrencyPickerOpen] = useState(false);
-  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
 
   const {
     data: accounts = [],
@@ -100,42 +103,9 @@ export default function ProfileScreen() {
   } = useAccountsQuery();
   const { mutateAsync: setDefaultAccount } = useSetDefaultAccount();
 
-  const handlePickAvatar = async () => {
-    if (!user) return;
-
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert(
-        "Permission needed",
-        "Allow photo library access to set a profile picture."
-      );
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.7,
-      base64: true,
-    });
-    if (result.canceled) return;
-
-    setUploadingAvatar(true);
-    try {
-      const asset = result.assets[0];
-      const filename = asset.uri.split("/").pop() || "avatar.jpg";
-      const match = /\.(\w+)$/.exec(filename);
-      const mimeType = match ? `image/${match[1]}` : "image/jpeg";
-      const dataUrl = `data:${mimeType};base64,${asset.base64}`;
-
-      await user.setProfileImage({ file: dataUrl });
-    } catch (err) {
-      console.error("Avatar upload failed:", err);
-      Alert.alert("Error", "Couldn't upload your photo. Please try again.");
-    } finally {
-      setUploadingAvatar(false);
-    }
+  // Avatar upload needs object storage (OPEN, D-OPEN-7); Me.avatar_url is always null until then.
+  const handlePickAvatar = () => {
+    Alert.alert("Coming soon", "Profile photos aren't available yet.");
   };
 
   const handleSignOut = () => {
@@ -144,12 +114,40 @@ export default function ProfileScreen() {
       {
         text: "Sign out",
         style: "destructive",
-        onPress: async () => {
-          await signOut();
-          router.replace("/sign-in");
-        },
+        // The guards redirect to /sign-in once the session is cleared.
+        onPress: () => logout(),
       },
     ]);
+  };
+
+  const openPrivacyPolicy = () => {
+    if (PRIVACY_POLICY_URL) {
+      Linking.openURL(PRIVACY_POLICY_URL);
+    } else {
+      // Placeholder until the policy is published (needed for the Play listing, D-OPEN-11).
+      Alert.alert("Privacy policy", "Our privacy policy will be published here before launch.");
+    }
+  };
+
+  const handleSignOutAll = () => {
+    Alert.alert(
+      "Sign out of all devices",
+      "This signs you out everywhere, including this phone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign out all",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await logoutAll();
+            } catch (err) {
+              Alert.alert("Error", describeError(err, "Couldn't sign out of all devices."));
+            }
+          },
+        },
+      ]
+    );
   };
 
   const closeModal = () => {
@@ -169,16 +167,16 @@ export default function ProfileScreen() {
 
   const handleCurrencySelect = async (selected: { code: string }) => {
     setCurrencyPickerOpen(false);
-    if (!user) return;
+    if (selected.code === currency) return;
     try {
-      const { error } = await supabase
-        .from("users")
-        .update({ currency: selected.code })
-        .eq("clerk_id", user.id);
-      if (error) throw error;
-      setCurrency(selected.code);
-    } catch {
-      Alert.alert("Error", "Couldn't update your currency.");
+      await updateMe({ currency: selected.code });
+    } catch (err) {
+      Alert.alert(
+        "Error",
+        isApiError(err, "currency_locked")
+          ? "You can't change your currency after adding transactions."
+          : describeError(err, "Couldn't update your currency.")
+      );
     }
   };
 
@@ -196,28 +194,17 @@ export default function ProfileScreen() {
         <View className="mx-5 mt-2 bg-brand-bg rounded-2xl px-5 py-6 items-center">
           <TouchableOpacity
             onPress={handlePickAvatar}
-            disabled={uploadingAvatar}
             activeOpacity={0.8}
             className="w-20 h-20 rounded-full bg-[#1A1D26] items-center justify-center overflow-hidden border-2 border-[#2A2E3A]"
           >
-            {uploadingAvatar ? (
-              <ActivityIndicator color="#8A8D96" />
-            ) : user?.imageUrl && user.hasImage ? (
-              <Image
-                source={{ uri: user.imageUrl }}
-                style={{ width: 80, height: 80 }}
-                contentFit="cover"
-              />
-            ) : (
-              <Feather name="user" size={30} color="#8A8D96" />
-            )}
+            <Feather name="user" size={30} color="#8A8D96" />
             <View className="absolute bottom-0 inset-x-0 h-6 bg-black/50 items-center justify-center">
               <Feather name="camera" size={13} color="#F2EFE9" />
             </View>
           </TouchableOpacity>
 
           <Text className="text-white text-2xl font-bold mt-3.5">
-            {user?.firstName} {user?.lastName}
+            {me?.name ?? ""}
           </Text>
           <View className="flex-row items-center gap-1.5 mt-1">
             <Feather name="mail" size={11} color="#8A8D96" />
@@ -225,7 +212,7 @@ export default function ProfileScreen() {
               className="text-brand-text-secondary text-xs"
               numberOfLines={1}
             >
-              {user?.emailAddresses?.[0]?.emailAddress}
+              {me?.email}
             </Text>
           </View>
         </View>
@@ -249,7 +236,7 @@ export default function ProfileScreen() {
                 key={account.id}
                 icon={ACCOUNT_ICON[account.type]}
                 label={account.name + (account.is_default ? " (default)" : "")}
-                value={formatPrice(account.balance, currency)}
+                value={formatMinor(account.balance_minor, account.currency)}
                 onPress={() => {
                   setEditingAccount(account);
                   setModalVisible(true);
@@ -290,16 +277,41 @@ export default function ProfileScreen() {
         <SectionLabel>Account</SectionLabel>
         <View className="mx-5 rounded-2xl overflow-hidden border border-[#E8E6DF]">
           <Row
+            icon="key"
+            label="Change password"
+            onPress={() => setChangePasswordOpen(true)}
+          />
+          <Row
             icon="log-out"
             label="Sign out"
             onPress={handleSignOut}
             showChevron={false}
             danger
           />
+          <Row
+            icon="smartphone"
+            label="Sign out of all devices"
+            onPress={handleSignOutAll}
+            showChevron={false}
+            danger
+          />
+          <Row
+            icon="trash-2"
+            label="Delete account"
+            onPress={() => setDeleteAccountOpen(true)}
+            showChevron={false}
+            danger
+          />
+        </View>
+
+        {/* About */}
+        <SectionLabel>About</SectionLabel>
+        <View className="mx-5 rounded-2xl overflow-hidden border border-[#E8E6DF]">
+          <Row icon="file-text" label="Privacy policy" onPress={openPrivacyPolicy} />
         </View>
       </ScrollView>
 
-      {user && (
+      {me && (
         <AccountModal
           visible={modalVisible}
           account={editingAccount}
@@ -309,6 +321,16 @@ export default function ProfileScreen() {
           onMadeDefault={handleMadeDefault}
         />
       )}
+
+      <DeleteAccountModal
+        visible={deleteAccountOpen}
+        onClose={() => setDeleteAccountOpen(false)}
+      />
+
+      <ChangePasswordModal
+        visible={changePasswordOpen}
+        onClose={() => setChangePasswordOpen(false)}
+      />
 
       <CurrencyPicker
         visible={currencyPickerOpen}

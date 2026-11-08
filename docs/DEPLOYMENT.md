@@ -48,11 +48,9 @@ Each app has a `.env.example` with these names.
 
 | Name | Status |
 | --- | --- |
-| `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` | **Legacy**, needed to run today, removed in Phase 4 |
-| `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY` | **Legacy**, removed in Phase 4 |
-| `EXPO_PUBLIC_GEMINI_API_KEY` | **Legacy and unsafe** (AI key in the bundle). Removed in Phase 4; revoke the key |
-| `EXPO_PUBLIC_API_BASE_URL` | Target (Phase 4) |
-| `EXPO_PUBLIC_APP_ENV` | Target |
+| `EXPO_PUBLIC_API_URL` | API base URL. Optional in dev (default `http://10.0.2.2:8080` on Android); required (HTTPS) for staging/production builds |
+| `EXPO_PUBLIC_PRIVACY_POLICY_URL` | Public privacy policy page (Play listing); empty = placeholder in Profile |
+| ~~`EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`, `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY`, `EXPO_PUBLIC_GEMINI_API_KEY`~~ | Removed in the repoint (2026-11-01). **Revoke the old Gemini key** in Google AI Studio: it shipped in old bundles |
 
 ## 3. CI/CD
 

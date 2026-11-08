@@ -1,8 +1,9 @@
 import { ALL_CURRENCIES, CurrencyPicker } from "@/components/CurrencyPicker";
-import { useSupabase } from "@/hooks/useSupabase";
+import { useCompleteOnboarding } from "@/hooks/mutations/useMeMutations";
+import { isApiError } from "@/lib/api/client";
+import { describeError } from "@/lib/api/errors";
 import { onboardingSchema, OnboardingFormValues } from "@/lib/schemas/onboarding";
-import { useUserStore } from "@/store/userStore";
-import { useUser } from "@clerk/expo";
+import { moneyInputErrorText, parseMoneyInput } from "@/lib/money";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -20,14 +21,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function OnboardingScreen() {
-  const { user } = useUser();
-  const authSupabase = useSupabase();
-  const setCurrency = useUserStore((s) => s.setCurrency);
-  const setNeedsOnboarding = useUserStore((s) => s.setNeedsOnboarding);
+  const { mutateAsync: completeOnboarding, isPending: saving } =
+    useCompleteOnboarding();
 
   const {
     control,
     handleSubmit,
+    setError: setFieldError,
     formState: { errors: formErrors },
   } = useForm<OnboardingFormValues>({
     resolver: zodResolver(onboardingSchema),
@@ -39,71 +39,40 @@ export default function OnboardingScreen() {
     ALL_CURRENCIES.find((c) => c.code === "INR") ?? ALL_CURRENCIES[0]
   );
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   const handleSave = async ({ startingBalance }: OnboardingFormValues) => {
-    const parsed = parseFloat(startingBalance.replace(/,/g, ""));
-    setSaving(true);
     setError("");
+    // String → integer minor units in the chosen currency (e.g. "50,000.50" INR → 5000050). No floats.
+    const parsed = parseMoneyInput(startingBalance, selectedCurrency.code);
+    if (!parsed.ok) {
+      setFieldError("startingBalance", {
+        message: moneyInputErrorText(
+          parsed.error,
+          selectedCurrency.code,
+          "Please enter a valid starting balance."
+        ),
+      });
+      return;
+    }
 
-    const { error: updateError } = await authSupabase
-      .from("users")
-      .update({
+    try {
+      // One call, one DB transaction: currency + timezone + the default account's opening balance
+      // (the starting balance is no longer recorded as income).
+      await completeOnboarding({
         currency: selectedCurrency.code,
-      })
-      .eq("clerk_id", user!.id);
-
-    if (updateError) {
-      setSaving(false);
-      setError("Something went wrong. Please try again.");
-      return;
+        opening_balance_minor: parsed.minor,
+      });
+    } catch (err) {
+      if (!isApiError(err, "already_onboarded")) {
+        setError(
+          isApiError(err, "currency_locked")
+            ? "Your account already has transactions in another currency."
+            : describeError(err)
+        );
+        return;
+      }
     }
-
-    const { data: defaultAccount, error: accountFetchError } = await authSupabase
-      .from("accounts")
-      .select("id, balance")
-      .eq("user_id", user!.id)
-      .eq("is_default", true)
-      .single();
-
-    if (accountFetchError || !defaultAccount) {
-      setSaving(false);
-      setError("Something went wrong. Please try again.");
-      return;
-    }
-
-    const { error: txError } = await authSupabase.from("transactions").insert({
-      user_id: user!.id,
-      account_id: defaultAccount.id,
-      type: "INCOME",
-      amount: parsed,
-      category: "other_income",
-      description: "Starting balance",
-      date: new Date().toISOString(),
-      input_method: "MANUAL",
-    });
-
-    if (txError) {
-      setSaving(false);
-      setError("Something went wrong. Please try again.");
-      return;
-    }
-
-    const { error: balanceError } = await authSupabase
-      .from("accounts")
-      .update({ balance: defaultAccount.balance + parsed })
-      .eq("id", defaultAccount.id);
-
-    setSaving(false);
-
-    if (balanceError) {
-      setError("Something went wrong. Please try again.");
-      return;
-    }
-
-    setCurrency(selectedCurrency.code);
-    setNeedsOnboarding(false);
     router.replace("/(root)/(tabs)");
   };
 

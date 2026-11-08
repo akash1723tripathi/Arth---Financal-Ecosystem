@@ -1,11 +1,8 @@
-import {
-  extractTransactionFromVoice,
-  ExtractedTransaction,
-} from "@/lib/services/extractTransaction";
+import { extractVoice, ExtractionDraft } from "@/lib/ai/extraction";
+import { isApiError } from "@/lib/api/client";
 import { GradientIconButton } from "@/components/GradientIconButton";
 import { AI_GRADIENT, RECORDING_GRADIENT, COLORS } from "@/constants/theme";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
-import { File } from "expo-file-system";
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
@@ -99,11 +96,12 @@ export function VoiceRecorderModal({
 }: {
   visible: boolean;
   onClose: () => void;
-  onExtracted: (result: ExtractedTransaction) => void;
+  onExtracted: (result: ExtractionDraft) => void;
 }) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [status, setStatus] = useState<Status>("idle");
   const [seconds, setSeconds] = useState(0);
+  const [notAvailable, setNotAvailable] = useState(false);
 
   const orbScale = useSharedValue(1);
 
@@ -111,6 +109,7 @@ export function VoiceRecorderModal({
     if (!visible) {
       setStatus("idle");
       setSeconds(0);
+      setNotAvailable(false);
       return;
     }
     (async () => {
@@ -163,13 +162,12 @@ export function VoiceRecorderModal({
       const uri = recorder.uri;
       if (!uri) throw new Error("No recording captured");
 
-      const file = new File(uri);
-      const base64 = await file.base64();
-      const result = await extractTransactionFromVoice(base64, "audio/m4a");
+      const result = await extractVoice(uri);
       onExtracted(result);
       onClose();
     } catch (err) {
-      console.error("Voice extraction failed:", err);
+      if (isApiError(err, "not_available")) setNotAvailable(true);
+      else console.error("Voice extraction failed:", err);
       setStatus("error");
     }
   };
@@ -201,8 +199,9 @@ export function VoiceRecorderModal({
             <>
               <Feather name="alert-circle" size={32} color="#FF6B4A" />
               <Text className="text-white/60 text-sm mt-3 mb-6 text-center">
-                Couldn&apos;t process that. Check your microphone permission and
-                try again.
+                {notAvailable
+                  ? "DEV ONLY: voice entry has no server endpoint yet (post-MVP). Hidden in release builds."
+                  : "Couldn't process that. Check your microphone permission and try again."}
               </Text>
               <TouchableOpacity
                 onPress={onClose}

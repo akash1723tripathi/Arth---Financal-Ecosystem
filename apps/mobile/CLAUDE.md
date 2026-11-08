@@ -11,29 +11,31 @@ Expo SDK 54 (`expo` 54.0.x) · Expo Router 6 (typed routes, React Compiler on) �
 TanStack Query 5 · Zustand 5 · react-hook-form + zod 4 · NativeWind 4 (Tailwind 3) · react-native-gifted-charts · date-fns 4.
 Native modules: expo-camera, expo-image-picker, expo-audio, expo-file-system (new `File`/`Directory` API), expo-sharing, expo-secure-store.
 
-**To be replaced (legacy Welth backend, do not remove yet):** `@clerk/expo` (auth), `@supabase/supabase-js` (data), and direct Gemini
-`fetch` calls with `EXPO_PUBLIC_GEMINI_API_KEY`. They are swapped for the Go API in the "repoint mobile" session.
-The full call inventory is in `docs/MIGRATION.md`.
+**Backend:** only the Arth Go API (`apps/api`) through `@arth/api-client` (generated from `api/openapi.yaml`). Clerk, Supabase and the
+client-side Gemini key were removed in the repoint (2026-11-01). Base URL: `EXPO_PUBLIC_API_URL` (default `http://10.0.2.2:8080` on Android).
 
 ## Folder structure (real)
 
 ```text
-app/_layout.tsx                  ClerkProvider + QueryClientProvider + GestureHandlerRootView, imports global.css
+app/_layout.tsx                  QueryClientProvider + GestureHandlerRootView; restores the session (secure store) at start
 app/index.tsx                    redirect: signed in → /(root)/(tabs), else → /sign-in
 app/(auth)/_layout.tsx           Stack; redirects signed-in users to /
-app/(auth)/sign-in.tsx, sign-up.tsx   custom Clerk flows (password, email code, MFA/client trust)
-app/(root)/_layout.tsx           auth gate + useUserSync + onboarding redirect + 1.5 s splash spinner
-app/(root)/onboarding.tsx        currency + starting balance
-app/(root)/(tabs)/_layout.tsx    NativeTabs on iOS, JS Tabs on Android
-app/(root)/(tabs)/index.tsx      Home / dashboard
-app/(root)/(tabs)/transactions.tsx, add-transaction.tsx, assistant.tsx, profile.tsx
-components/                      modals (Account, Budget, CurrencyPicker, ReceiptScanner, VoiceRecorder, FormSheet), rows, pills, cards
-hooks/queries, hooks/mutations   TanStack Query hooks (screens get server data only through these)
-hooks/useSupabase.ts, useUserSync.ts   legacy Clerk→Supabase glue (to be replaced)
-lib/services/                    data + AI calls (Supabase, Gemini: to be replaced)
-lib/query/  lib/schemas/  lib/utils*   QueryClient + keys, zod form schemas, formatting, CSV export
-store/userStore.ts               Zustand: currency + needsOnboarding
-types/  constants/               domain types, categories (21 keys), theme colours
+app/(auth)/sign-in.tsx, sign-up.tsx   email + password on POST /v1/auth/login|register
+app/(root)/_layout.tsx           auth gate + GET /v1/me (needs_onboarding) + 1.5 s splash + "can't reach the server" retry; a Stack
+app/(root)/onboarding.tsx        currency + starting balance → POST /v1/me/onboarding
+app/(root)/transaction/[id].tsx  edit a transaction (PATCH)
+app/(root)/(tabs)/_layout.tsx    NativeTabs on iOS, JS Tabs on Android (Assistant tab only in __DEV__)
+app/(root)/(tabs)/index.tsx      Home = GET /v1/dashboard
+app/(root)/(tabs)/transactions.tsx, add-transaction.tsx, assistant.tsx (dev-only placeholder), profile.tsx
+components/                      TransactionForm (add + edit), modals (Account, Budget, ChangePassword, DeleteAccount, CurrencyPicker,
+                                 ReceiptScanner, VoiceRecorder [dev only], FormSheet), rows, pills, cards
+hooks/queries, hooks/mutations   TanStack Query hooks over the typed client (screens get server data only through these)
+lib/api/                         client.ts (typed client), session.ts (secure-store refresh token + shared session core), errors.ts
+lib/money.ts                     THE money module (parse input → minor units, format minor units); re-exports @arth/api-client money
+lib/ai/extraction.ts             receipt upload to POST /v1/ai/receipt-extractions; voice placeholder (no endpoint yet)
+lib/config.ts  lib/query/  lib/schemas/  lib/utils/exportTransactions.ts   API URL, QueryClient + keys, zod schemas, CSV export
+store/authStore.ts               Zustand: session status (loading | signedIn | signedOut)
+constants/                       theme colours (categories come from GET /v1/categories)
 assets/images/                   icons, splash, logos (still Welth artwork: to replace)
 ```
 
@@ -41,11 +43,13 @@ The `@/*` alias maps to `apps/mobile/*` (`tsconfig.json`). Full screen spec: `do
 
 ## Rules
 
-- Server data flows through TanStack Query hooks in `hooks/`. Screens should not call clients directly. Today `onboarding.tsx`, `profile.tsx`
-  and `useUserSync.ts` still do; that is legacy and gets fixed in the repoint session.
+- Server data flows through TanStack Query hooks in `hooks/` (`unwrap(api.GET(...))`). Screens never call the client directly.
+- **Auth:** never call `/v1/auth/refresh` yourself. All requests go through `authedFetch` (lib/api/session.ts), which shares ONE in-flight
+  refresh (rotation has no grace window: two parallel refreshes revoke the session, DECISIONS Q-8) and retries once on `401 unauthorized`.
 - **No secrets in the bundle.** Everything `EXPO_PUBLIC_*` is public. Never add a new provider key; AI calls move behind the Go API.
-- **Money:** do not add new float maths. The legacy code uses `parseFloat`; the repoint session switches to integer `amount_minor` from the API.
-- **Dates:** a picked day should be sent as local `yyyy-MM-dd`, not `toISOString()` (legacy code does the latter).
+- **Money:** integer `*_minor` from the API. Parse input with `parseMoneyInput(text, currency)`, display with `formatMinor(minor, currency)`
+  (`lib/money.ts`). Never `parseFloat`, never float maths on amounts; totals come from the server.
+- **Dates:** a picked day is sent as local `yyyy-MM-dd` (`format(date, "yyyy-MM-dd")`), never `toISOString()`.
 - **Android first:** iOS uses `NativeTabs` and Android uses JS `Tabs`; keep both working.
 - **Styling:** NativeWind classes. Raw hex only where className cannot reach (`constants/theme.ts`, kept in sync with `tailwind.config.js`).
 - UI and behaviour stay as they are until a session explicitly changes them. No redesigns, no new features unasked.

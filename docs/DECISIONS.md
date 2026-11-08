@@ -18,7 +18,7 @@ so the code can be built before a vendor is chosen.
 | D-8 | Money = `BIGINT` minor units + ISO-4217 code | No float rounding errors |
 | D-9 | Every user-data query scoped by the authenticated `user_id` | Replaces Supabase RLS |
 | D-10 | Clients: Expo (existing app, Android first) + Next.js web | Reuse the working mobile UI. Web for desktop users |
-| D-11 | Session order: mobile restructure → Go API (incl. auth) → Next.js web → repoint mobile + drop Clerk/Supabase → emulator testing → hardening → Play closed test → launch | Build the backend before removing the old one |
+| D-11 | Session order: mobile restructure → Go API (incl. auth) → repoint mobile + drop Clerk/Supabase → Next.js web → emulator testing → hardening → Play closed test → launch (repoint moved before web: D-31) | Build the backend before removing the old one |
 | D-12 | Monorepo, pnpm 10 workspace (`nodeLinker: hoisted`) | Hoisted is required: isolated installs broke Metro/NativeWind (verified) |
 | D-13 | Git is local only (no GitHub remote). Conventional Commits, a branch per piece of work | Owner's choice. CI waits until a remote exists |
 | D-14 | Build tools allowed: pnpm, Docker, GitHub Actions (when a remote exists), EAS Build | Not product dependencies |
@@ -64,6 +64,18 @@ asked for that; the owner should review these.
 | D-28 | Onboarding is refused (`409 currency_locked`) only when it would **change** the default account's currency while it has transactions; the same currency with transactions is allowed | Nothing is lost when the currency stays |
 | D-29 | The per-request session check compares `expires_at` with DB `now()`; refresh expiry uses the app clock (`Deps.Now`) | Session check is one SQL query; refresh logic is clock-injectable for tests. Fine on one host, watch for clock skew |
 | D-30 | `PATCH /v1/me` cannot clear `name` (`minLength: 1`, whitespace-only → `422`) | Follows D-20 (no nulls); an empty display name has no use |
+
+## Implementation choices made in the mobile repoint session (2026-11-01, review needed)
+
+| ID | Choice | Reason |
+| --- | --- | --- |
+| D-31 | Session order changed: the mobile repoint (old step 4) ran **before** the Next.js web app | Owner's instruction for the 2026-11-01 session |
+| D-32 | Mobile tokens: refresh token only in `expo-secure-store`, access token in memory. A refresh that fails on the network, with `429` or `5xx` keeps the session (the user retries); any other refusal (`401 refresh_invalid`) clears it and shows sign-in | Signing users out on a flaky connection would be worse; the token is not consumed in those cases |
+| D-33 | The refresh/retry logic lives in `@arth/api-client/session` (platform-neutral, storage pluggable), not only in the app | One tested implementation; web can reuse it if D-OPEN-6 picks bearer tokens; the Node live check drives the exact same code |
+| D-34 | Money display uses our own formatter (`formatMinor`): always the ISO exponent's decimals, Indian grouping for INR only, symbols from a fixed table for the 33 supported currencies | No float conversion for `Intl.NumberFormat`; identical output on Hermes and Node. **Review:** hide `.00` on big totals? |
+| D-35 | Removed `currency-codes` and `currency-symbol-map`; the currency picker lists the API's 33 supported currencies | The API rejects other codes anyway |
+| D-36 | Voice entry and the assistant: hidden in release builds via `__DEV__`; dev builds show them marked "DEV ONLY" with placeholders, no client AI | No server endpoints yet (post-MVP, D-OPEN-1) |
+| D-37 | Search on the Transactions tab is the server's `q` (description substring); matching on category names is gone | Pagination makes client-side search over "everything" impossible; a category filter exists separately in the API |
 
 ## OPEN
 
@@ -143,7 +155,7 @@ Postgres-backed library. Trade-offs: a dependency vs code to maintain. River nee
 - ~~Go: `golang.org/x/crypto` (argon2id), a JWT library vs stdlib, `google/uuid`, `golang.org/x/time/rate`.~~ **Decided** (owner, 2026-11-01;
   see D-16): `golang.org/x/crypto`, `github.com/golang-jwt/jwt/v5`, `google/uuid`, `golang.org/x/time/rate` (+ `golang.org/x/text`). golangci-lint is still open.
 - ~~TS client generator for `packages/api-client`: openapi-typescript + openapi-fetch, orval, or hey-api.~~ **Decided** (owner, 2026-11-01):
-  **openapi-typescript + openapi-fetch**, set up in the web session.
+  **openapi-typescript + openapi-fetch**, set up in the mobile repoint session (2026-11-01, `packages/api-client`).
 - Error tracking: Sentry (SaaS), self-hosted GlitchTip, or logs only.
 - Web UI kit and charts library.
 

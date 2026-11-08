@@ -1,9 +1,9 @@
 # Architecture
 
-Current = what the code in `apps/mobile` does today (inherited from Welth). Target = the decided design (`docs/DECISIONS.md`).
-No target component is built yet.
+§1 = the Welth design the app started from (historical since 2026-11-01). §2 = the decided design (`docs/DECISIONS.md`), which is now
+built for `apps/api` and `apps/mobile` (own auth, Go API on Postgres, `@arth/api-client`); `apps/web` and the worker are not built yet.
 
-## 1. Current (as of the mobile restructure)
+## 1. Before the repoint (Welth design, historical)
 
 ```text
                  ┌──────────────────── apps/mobile (Expo SDK 54) ─────────────────────┐

@@ -40,7 +40,7 @@ apps/web/
 
 | Mobile (Expo Router) | Web route | Notes |
 | --- | --- | --- |
-| `app/(auth)/sign-in.tsx`, `sign-up.tsx` (today: Clerk custom flows) | `/sign-in`, `/sign-up` | Same fields and copy as mobile. No email-code step until the email provider is decided. |
+| `app/(auth)/sign-in.tsx`, `sign-up.tsx` (own auth on the Go API since 2026-11-01) | `/sign-in`, `/sign-up` | Same fields and copy as mobile. No email-code step until the email provider is decided. |
 | `app/(root)/onboarding.tsx` | `/onboarding` | Same fields + timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`). |
 | `app/(root)/(tabs)/index.tsx` (Home) | `/dashboard` | Balance, month income/expense, budget bar, category pie, recent 5. One `GET /v1/dashboard`. |
 | `app/(root)/(tabs)/transactions.tsx` | `/transactions` | Table with filters (type, account), search, daily bar chart, CSV export button, infinite or paged list. |

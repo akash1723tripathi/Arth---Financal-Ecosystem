@@ -1,31 +1,43 @@
-import { getCategoryConfig } from "@/constants/categories";
-import { Transaction } from "@/lib/services/transactions";
-import { formatPrice } from "@/lib/utils";
+import type { InputMethod, Transaction } from "@arth/api-client";
+import {
+  TRANSFER_DISPLAY,
+  toCategoryDisplay,
+  useCategories,
+} from "@/hooks/queries/useCategoriesQuery";
+import { formatMinor } from "@/lib/money";
 import { Feather } from "@expo/vector-icons";
 import Swipeable from "react-native-gesture-handler/ReanimatedSwipeable";
 import { Text, TouchableOpacity, View } from "react-native";
 
-const INPUT_METHOD_ICON: Record<
-  Transaction["input_method"],
-  keyof typeof Feather.glyphMap
-> = {
+const INPUT_METHOD_ICON: Record<InputMethod, keyof typeof Feather.glyphMap> = {
   MANUAL: "edit-3",
   RECEIPT_SCAN: "camera",
   VOICE: "mic",
+  RECURRING: "repeat",
+  IMPORT: "upload",
 };
 
 export function TransactionRow({
   tx,
+  onPress,
   onDelete,
 }: {
   tx: Transaction;
+  onPress?: () => void;
   onDelete?: () => void;
 }) {
-  const config = getCategoryConfig(tx.category);
-  const isIncome = tx.type === "INCOME";
+  const { byId } = useCategories();
+  const isTransfer = tx.type === "TRANSFER_IN" || tx.type === "TRANSFER_OUT";
+  const config = isTransfer
+    ? TRANSFER_DISPLAY
+    : toCategoryDisplay(tx.category_id ? byId.get(tx.category_id) : undefined);
+  const isIncoming = tx.type === "INCOME" || tx.type === "TRANSFER_IN";
 
   const row = (
-    <View
+    <TouchableOpacity
+      activeOpacity={onPress ? 0.7 : 1}
+      disabled={!onPress}
+      onPress={onPress}
       className="flex-row items-center bg-white rounded-2xl border border-[#E8E6DF] pl-3 pr-3.5 py-4"
       style={{ borderLeftWidth: 3, borderLeftColor: config.color }}
     >
@@ -54,24 +66,19 @@ export function TransactionRow({
               {config.label}
             </Text>
           </View>
-          {tx.is_flagged && (
-            <View className="flex-row items-center gap-1 ml-1">
-              <Feather name="alert-triangle" size={11} color="#FF6B4A" />
-              <Text className="text-brand-coral text-[11px]">Flagged</Text>
-            </View>
-          )}
         </View>
       </View>
 
+      {/* Each row in its own currency (was always ₹ before: MIGRATION §6.5). */}
       <Text
         className={`text-sm font-medium ${
-          isIncome ? "text-brand-success" : "text-brand-coral"
+          isIncoming ? "text-brand-success" : "text-brand-coral"
         }`}
       >
-        {isIncome ? "+" : "-"}
-        {formatPrice(tx.amount)}
+        {isIncoming ? "+" : "-"}
+        {formatMinor(tx.amount_minor, tx.currency)}
       </Text>
-    </View>
+    </TouchableOpacity>
   );
 
   if (!onDelete) {
